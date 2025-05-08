@@ -3,98 +3,230 @@ import openpyxl
 import shutil
 import os
 import numpy as np
-from datetime import datetime
+import logging
+import argparse
+import pickle
+import json
+from datetime import datetime, timedelta
+from tqdm import tqdm
+from pathlib import Path
 
-# Bloomberg API setup
-def setup_bloomberg_session():
-    options = blpapi.SessionOptions()
-    options.setServerHost("localhost")
-    options.setServerPort(8194)
-    session = blpapi.Session(options)
-    if not session.start():
-        print("Failed to start Bloomberg session.")
-        return None
-    if not session.openService("//blp/refdata"):
-        print("Failed to open Bloomberg reference data service.")
-        return None
-    return session
+# Configure logging
+def setup_logging():
+    logger = logging.getLogger("bloomberg_valuation")
+    logger.setLevel(logging.INFO)
+    
+    # Create directory for logs
+    os.makedirs("logs", exist_ok=True)
+    
+    # Console handler
+    ch = logging.StreamHandler()
+    ch.setLevel(logging.INFO)
+    
+    # File handler with timestamp
+    log_file = f"logs/bloomberg_extraction_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+    fh = logging.FileHandler(log_file)
+    fh.setLevel(logging.DEBUG)
+    
+    # Format
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    ch.setFormatter(formatter)
+    fh.setFormatter(formatter)
+    
+    logger.addHandler(ch)
+    logger.addHandler(fh)
+    
+    return logger
 
-# Fetch historical data (BDH)
-def fetch_bloomberg_data(session, ticker, fields, start_year=2014, end_year=2024):
-    ref_data_service = session.getService("//blp/refdata")
-    request = ref_data_service.createRequest("HistoricalDataRequest")
-    security = f"{ticker} US Equity"
-    request.getElement("securities").appendValue(security)
-    for field in fields:
-        request.getElement("fields").appendValue(field)
-    request.set("periodicitySelection", "YEARLY")
-    request.set("startDate", f"{start_year}0101")
-    request.set("endDate", f"{end_year}1231")
-    session.sendRequest(request)
+# Load configuration
+def load_config(config_path=None):
+    default_config = {
+        "bloomberg_host": "localhost",
+        "bloomberg_port": 8194,
+        "start_year": 2014,
+        "end_year": 2024,
+        "template_path": "LIS_Valuation_Empty.xlsx",
+        "cache_dir": "cache",
+        "cache_max_age_days": 1
+    }
     
-    data = {field: {} for field in fields}
-    while True:
-        event = session.nextEvent()
-        if event.eventType() == blpapi.Event.RESPONSE or event.eventType() == blpapi.Event.PARTIAL_RESPONSE:
-            for msg in event:
-                security_data = msg.getElement("securityData")
-                field_data = security_data.getElement("fieldData")
-                for i in range(field_data.numValues()):
-                    datum = field_data.getValue(i)
-                    date = datum.getElement("date").getValue()
-                    year = date.year
-                    for field in fields:
-                        if datum.hasElement(field):
-                            value = datum.getElement(field).getValue()
-                            data[field][year] = value
-        if event.eventType() == blpapi.Event.RESPONSE:
-            break
-    return data
+    if config_path and os.path.exists(config_path):
+        with open(config_path, 'r') as f:
+            user_config = json.load(f)
+            default_config.update(user_config)
+    
+    return default_config
 
-# Fetch bulk data (BDS)
-def fetch_bloomberg_bulk_data(session, ticker, field, fiscal_years):
-    ref_data_service = session.getService("//blp/refdata")
-    request = ref_data_service.createRequest("ReferenceDataRequest")
-    security = f"{ticker} US Equity"
-    request.getElement("securities").appendValue(security)
-    request.getElement("fields").appendValue(field)
+# Bloomberg API setup with error handling
+def setup_bloomberg_session(host, port, max_retries=3):
+    logger = logging.getLogger("bloomberg_valuation")
     
-    # Add overrides for fiscal year and filing status
-    overrides = request.getElement("overrides")
-    for year in fiscal_years:
-        override = overrides.appendElement()
-        override.setElement("fieldId", "EQY_FUND_YEAR")
-        override.setElement("value", str(year))
-        override = overrides.appendElement()
-        override.setElement("fieldId", "FILING_STATUS")
-        override.setElement("value", "FINAL")
+    for attempt in range(max_retries):
+        try:
+            logger.info(f"Connecting to Bloomberg API at {host}:{port} (attempt {attempt+1}/{max_retries})")
+            options = blpapi.SessionOptions()
+            options.setServerHost(host)
+            options.setServerPort(port)
+            session = blpapi.Session(options)
+            
+            if not session.start():
+                logger.error("Failed to start Bloomberg session")
+                continue
+                
+            if not session.openService("//blp/refdata"):
+                logger.error("Failed to open Bloomberg reference data service")
+                session.stop()
+                continue
+                
+            logger.info("Successfully connected to Bloomberg API")
+            return session
+        except Exception as e:
+            logger.error(f"Error connecting to Bloomberg: {e}")
+            if attempt == max_retries - 1:
+                raise
+            logger.info(f"Retrying in 5 seconds...")
+            import time
+            time.sleep(5)
     
-    session.sendRequest(request)
-    
-    data = {}
-    while True:
-        event = session.nextEvent()
-        if event.eventType() == blpapi.Event.RESPONSE or event.eventType() == blpapi.Event.PARTIAL_RESPONSE:
-            for msg in event:
-                security_data = msg.getElement("securityData")
-                for i in range(security_data.numValues()):
-                    datum = security_data.getValue(i)
-                    if datum.hasElement(field):
-                        bulk_data = datum.getElement(field)
-                        for j in range(bulk_data.numValues()):
-                            row = bulk_data.getValue(j)
-                            # Parse relevant data (e.g., description, value)
-                            # This is a placeholder; adjust based on field structure
-                            year = row.getElement("Fiscal Year").getValue() if row.hasElement("Fiscal Year") else None
-                            value = row.getElement("Value").getValue() if row.hasElement("Value") else 0
-                            if year:
-                                data[int(year)] = value
-        if event.eventType() == blpapi.Event.RESPONSE:
-            break
-    return data
+    return None
 
-# Calculate derived metrics
-def calculate_derived_metrics(data, start_year=2014, end_year=2024):
+# Cache management
+def get_cached_data(ticker, start_year, end_year, cache_dir, max_age_days=1):
+    logger = logging.getLogger("bloomberg_valuation")
+    cache_file = os.path.join(cache_dir, f"{ticker}_{start_year}_{end_year}_data.pkl")
+    
+    # Check if cache exists and is recent
+    if os.path.exists(cache_file):
+        modified_time = datetime.fromtimestamp(os.path.getmtime(cache_file))
+        if datetime.now() - modified_time < timedelta(days=max_age_days):
+            logger.info(f"Using cached data for {ticker} from {modified_time}")
+            with open(cache_file, 'rb') as f:
+                return pickle.load(f)
+    
+    logger.info(f"No valid cache found for {ticker}")
+    return None
+
+def cache_data(ticker, start_year, end_year, bdh_data, derived_data, cache_dir):
+    logger = logging.getLogger("bloomberg_valuation")
+    os.makedirs(cache_dir, exist_ok=True)
+    
+    data = {
+        "bdh_data": bdh_data,
+        "derived_data": derived_data,
+        "cached_at": datetime.now().isoformat()
+    }
+    
+    cache_file = os.path.join(cache_dir, f"{ticker}_{start_year}_{end_year}_data.pkl")
+    with open(cache_file, 'wb') as f:
+        pickle.dump(data, f)
+    
+    logger.info(f"Data cached for {ticker} at {cache_file}")
+
+# Fetch historical data (BDH) with proper error handling
+def fetch_bloomberg_data(session, ticker, fields, start_year, end_year, timeout=60000):
+    logger = logging.getLogger("bloomberg_valuation")
+    
+    try:
+        logger.info(f"Fetching Bloomberg data for {ticker} ({len(fields)} fields)")
+        ref_data_service = session.getService("//blp/refdata")
+        request = ref_data_service.createRequest("HistoricalDataRequest")
+        security = f"{ticker} US Equity"
+        
+        request.getElement("securities").appendValue(security)
+        for field in fields:
+            request.getElement("fields").appendValue(field)
+        
+        request.set("periodicitySelection", "YEARLY")
+        request.set("startDate", f"{start_year}0101")
+        request.set("endDate", f"{end_year}1231")
+        
+        logger.debug(f"Sending request for {ticker}")
+        session.sendRequest(request)
+        
+        data = {field: {} for field in fields}
+        
+        start_time = datetime.now()
+        while True:
+            # Check for timeout
+            if (datetime.now() - start_time).total_seconds() * 1000 > timeout:
+                logger.error(f"Request timed out after {timeout/1000} seconds")
+                raise TimeoutError(f"Bloomberg API request timed out")
+            
+            event = session.nextEvent(500)  # 500ms timeout for next event
+            
+            if event.eventType() == blpapi.Event.RESPONSE or event.eventType() == blpapi.Event.PARTIAL_RESPONSE:
+                for msg in event:
+                    if msg.hasElement("securityData"):
+                        security_data = msg.getElement("securityData")
+                        
+                        # Check for security errors
+                        if security_data.hasElement("securityError"):
+                            security_error = security_data.getElement("securityError")
+                            error_msg = security_error.getElementAsString("message")
+                            logger.error(f"Security error for {ticker}: {error_msg}")
+                            continue
+                        
+                        if security_data.hasElement("fieldData"):
+                            field_data = security_data.getElement("fieldData")
+                            
+                            for i in range(field_data.numValues()):
+                                datum = field_data.getValue(i)
+                                
+                                if datum.hasElement("date"):
+                                    date = datum.getElement("date").getValue()
+                                    year = date.year
+                                    
+                                    for field in fields:
+                                        if datum.hasElement(field):
+                                            try:
+                                                value = datum.getElement(field).getValue()
+                                                data[field][year] = value
+                                            except Exception as e:
+                                                logger.warning(f"Error extracting {field} for {year}: {e}")
+                                                data[field][year] = None
+                                else:
+                                    logger.warning("Missing date element in response")
+            
+            if event.eventType() == blpapi.Event.RESPONSE:
+                break
+        
+        logger.info(f"Successfully fetched data for {ticker}")
+        return data
+    
+    except Exception as e:
+        logger.error(f"Error fetching Bloomberg data: {e}")
+        raise
+
+# Validate and clean the data
+def validate_and_clean_data(data):
+    logger = logging.getLogger("bloomberg_valuation")
+    logger.info("Validating and cleaning data")
+    
+    cleaned_data = {}
+    for field, values in data.items():
+        cleaned_data[field] = {}
+        for year, value in values.items():
+            # Handle null/None values
+            if value is None:
+                logger.debug(f"Null value found for {field} in {year}, replacing with 0")
+                cleaned_data[field][year] = 0
+                continue
+            
+            # Handle unexpected data types
+            try:
+                cleaned_data[field][year] = float(value)
+            except (ValueError, TypeError):
+                logger.warning(f"Invalid value for {field} in {year}: {value}, replacing with 0")
+                cleaned_data[field][year] = 0
+    
+    logger.info("Data validation complete")
+    return cleaned_data
+
+# Calculate derived metrics with robustness
+def calculate_derived_metrics(data, start_year, end_year):
+    logger = logging.getLogger("bloomberg_valuation")
+    logger.info("Calculating derived metrics")
+    
     derived = {
         "Changes in Net Working Capital": {},
         "DSO": {},
@@ -103,237 +235,280 @@ def calculate_derived_metrics(data, start_year=2014, end_year=2024):
         "Net Cash from Investments & Acquisitions": {}
     }
     
-    for year in range(start_year, end_year + 1):
-        # Changes in Net Working Capital
-        if year in data["TOT_CUR_ASSETS"] and year in data["TOT_CUR_LIAB"] and \
-           year - 1 in data["TOT_CUR_ASSETS"] and year - 1 in data["TOT_CUR_LIAB"]:
-            nwc_t = data["TOT_CUR_ASSETS"][year] - data["TOT_CUR_LIAB"][year]
-            nwc_t1 = data["TOT_CUR_ASSETS"][year - 1] - data["TOT_CUR_LIAB"][year - 1]
-            derived["Changes in Net Working Capital"][year] = nwc_t - nwc_t1
+    for year in range(start_year + 1, end_year + 1):  # Start from second year for NWC changes
+        try:
+            # Changes in Net Working Capital
+            if all(k in data and year in data[k] and year-1 in data[k] 
+                   for k in ["TOT_CUR_ASSETS", "TOT_CUR_LIAB"]):
+                nwc_t = data["TOT_CUR_ASSETS"][year] - data["TOT_CUR_LIAB"][year]
+                nwc_t1 = data["TOT_CUR_ASSETS"][year - 1] - data["TOT_CUR_LIAB"][year - 1]
+                derived["Changes in Net Working Capital"][year] = nwc_t - nwc_t1
+            else:
+                logger.debug(f"Missing data for NWC calculation in {year}")
+            
+            # DSO, DIH, DPO
+            if all(k in data and year in data[k] for k in ["ACCT_RCV", "SALES_REV_TURN", 
+                                                          "INVENTORIES", "COGS", "ACCT_PAYABLE"]):
+                revenue = data["SALES_REV_TURN"][year]
+                cogs = data["COGS"][year]
+                ar = data["ACCT_RCV"][year]
+                inv = data["INVENTORIES"][year]
+                ap = data["ACCT_PAYABLE"][year]
+                
+                # Avoid division by zero
+                derived["DSO"][year] = (ar / revenue * 365) if revenue and revenue != 0 else 0
+                derived["DIH"][year] = (inv / cogs * 365) if cogs and cogs != 0 else 0
+                derived["DPO"][year] = (ap / cogs * 365) if cogs and cogs != 0 else 0
+            else:
+                logger.debug(f"Missing data for DSO/DIH/DPO calculation in {year}")
+            
+            # Net Cash from Investments & Acquisitions
+            if all(k in data and year in data[k] for k in ["CF_ACQUISITIONS", "CF_DISPOSALS", "CF_OTHER_INVEST_ACT"]):
+                derived["Net Cash from Investments & Acquisitions"][year] = (
+                    data["CF_ACQUISITIONS"][year] +
+                    data["CF_DISPOSALS"][year] +
+                    data["CF_OTHER_INVEST_ACT"][year]
+                )
+            else:
+                logger.debug(f"Missing data for Net Cash from Investments & Acquisitions in {year}")
         
-        # DSO, DIH, DPO
-        if year in data["ACCT_RCV"] and year in data["SALES_REV_TURN"] and \
-           year in data["INVENTORIES"] and year in data["COGS"] and \
-           year in data["ACCT_PAYABLE"]:
-            revenue = data["SALES_REV_TURN"][year]
-            cogs = data["COGS"][year]
-            ar = data["ACCT_RCV"][year]
-            inv = data["INVENTORIES"][year]
-            ap = data["ACCT_PAYABLE"][year]
-            derived["DSO"][year] = (ar / revenue * 365) if revenue else 0
-            derived["DIH"][year] = (inv / cogs * 365) if cogs else 0
-            derived["DPO"][year] = (ap / cogs * 365) if cogs else 0
-        
-        # Net Cash from Investments & Acquisitions
-        if year in data["CF_ACQUISITIONS"] and year in data["CF_DISPOSALS"] and \
-           year in data["CF_OTHER_INVEST_ACT"]:
-            derived["Net Cash from Investments & Acquisitions"][year] = (
-                data["CF_ACQUISITIONS"][year] +
-                data["CF_DISPOSALS"][year] +
-                data["CF_OTHER_INVEST_ACT"][year]
-            )
+        except Exception as e:
+            logger.error(f"Error calculating derived metrics for {year}: {e}")
     
+    logger.info("Derived metrics calculation complete")
     return derived
 
-# Calculate CAGR
+# Calculate CAGR with error handling
 def calculate_cagr(start_value, end_value, years):
-    if start_value == 0 or end_value == 0 or years <= 0:
+    if years <= 0:
         return 0
-    return ((end_value / start_value) ** (1 / years) - 1) * 100
+    
+    try:
+        if start_value == 0 or end_value == 0:
+            return 0
+        return ((end_value / start_value) ** (1 / years) - 1) * 100
+    except Exception:
+        return 0
 
-# Field map
-field_map = {
-    # Income Statement
-    "Revenue (Sales)": {"source": "BDH", "field": "SALES_REV_TURN"},
-    "COGS (Cost of Goods Sold)": {"source": "BDH", "field": "COGS"},
-    "Gross Profit": {"source": "BDH", "field": "GROSS_PROFIT"},
-    "SG&A (Selling, General & Administrative)": {"source": "BDH", "field": "SGA_EXP"},
-    "R&D (Research & Development)": {"source": "BDH", "field": "RD_EXP"},
-    "Other Operating (Income) Expenses": {"source": "BDH", "field": "IS_OTHER_OPER_EXP"},
-    "EBITDA": {"source": "BDH", "field": "EBITDA"},
-    "D&A (Depreciation & Amortization)": {"source": "BDH", "field": "DEPR_AMORT_EXP"},
-    "Depreciation Expense": {"source": "BDH", "field": "DEPRECIATION_EXP"},
-    "Amortization Expense": {"source": "BDH", "field": "AMORT_INTAN_EXP"},
-    "Operating Income (EBIT)": {"source": "BDH", "field": "OPER_INC"},
-    "Net Interest Expense (Income)": {"source": "BDH", "field": "NET_INT_EXP"},
-    "Interest Expense": {"source": "BDH", "field": "INT_EXP"},
-    "Interest Income": {"source": "BDH", "field": "NON_OPER_INT_INC"},
-    "FX (Gain) Loss": {"source": "BDH", "field": "IS_FX_GAIN_LOSS"},
-    "Other Non-Operating (Income) Expenses": {"source": "BDH", "field": "IS_NON_OPER_INC_EXP"},
-    "Pre-Tax Income (EBT)": {"source": "BDH", "field": "INC_BEF_XO_ITEMS"},
-    "Tax Expense (Benefits)": {"source": "BDH", "field": "TOT_PROV_INC_TAX"},
-    "Net Income": {"source": "BDH", "field": "NET_INCOME"},
-    "EPS Basic": {"source": "BDH", "field": "BASIC_EPS"},
-    "EPS Diluted": {"source": "BDH", "field": "DILUTED_EPS"},
-    "Basic Weighted Average Shares": {"source": "BDH", "field": "BASIC_AVG_SHS"},
-    "Diluted Weighted Average Shares": {"source": "BDH", "field": "DILUTED_AVG_SHS"},
-    # Balance Sheet
-    "Cash & Cash Equivalents & ST Investments": {"source": "BDH", "field": "CASH_AND_ST_INVEST"},
-    "Cash & Cash Equivalents": {"source": "BDH", "field": "CASH_AND_EQUIV"},
-    "Short-Term Investments": {"source": "BDH", "field": "ST_INVEST"},
-    "Accounts Receivable": {"source": "BDH", "field": "ACCT_RCV"},
-    "Inventory": {"source": "BDH", "field": "INVENTORIES"},
-    "Prepaid Expenses and Other Current Assets": {"source": "BDH", "field": "OTH_CUR_ASSETS"},
-    "Current Assets": {"source": "BDH", "field": "TOT_CUR_ASSETS"},
-    "Net PP&E (Property, Plant and Equipment)": {"source": "BDH", "field": "NET_PPE"},
-    "Gross PP&E (Property, Plant and Equipment)": {"source": "BDH", "field": "GROSS_PPE"},
-    "Accumulated Depreciation": {"source": "BDH", "field": "ACCUM_DEPR"},
-    "Right-of-Use Assets": {"source": "BDH", "field": "OPER_LEASE_ASSETS"},
-    "Intangibles": {"source": "BDH", "field": "INTANGIBLE_ASSETS"},
-    "Goodwill": {"source": "BDH", "field": "GOODWILL"},
-    "Intangibles excl. Goodwill": {"source": "BDH", "field": "NET_OTHER_INTAN_ASSETS"},
-    "Other Non-Current Assets": {"source": "BDH", "field": "OTH_NON_CUR_ASSETS"},
-    "Non-Current Assets": {"source": "BDH", "field": "TOT_NON_CUR_ASSETS"},
-    "Total Assets": {"source": "BDH", "field": "TOT_ASSETS"},
-    "Accounts Payable": {"source": "BDH", "field": "ACCT_PAYABLE"},
-    "Short-Term Debt": {"source": "BDH", "field": "ST_DEBT"},
-    "Short-Term Borrowings": {"source": "BDH", "field": "ST_BORROWINGS"},
-    "Current Portion of Lease Liabilities": {"source": "BDH", "field": "CUR_PORT_LT_LEASE_LIAB"},
-    "Accrued Expenses and Other Current Liabilities": {"source": "BDH", "field": "OTH_CUR_LIAB"},
-    "Current Liabilities": {"source": "BDH", "field": "TOT_CUR_LIAB"},
-    "Long-Term Debt": {"source": "BDH", "field": "LT_DEBT"},
-    "Long-Term Borrowings": {"source": "BDH", "field": "LT_BORROWINGS"},
-    "Long-Term Operating Lease Liabilities": {"source": "BDH", "field": "LT_LEASE_LIAB"},
-    "Other Non-Current Liabilities": {"source": "BDH", "field": "OTH_NON_CUR_LIAB"},
-    "Non-Current Liabilities": {"source": "BDH", "field": "TOT_NON_CUR_LIAB"},
-    "Total Liabilities": {"source": "BDH", "field": "TOT_LIAB"},
-    "Shareholder's Equity": {"source": "BDH", "field": "TOT_COMMON_EQY"},
-    "Non-Controlling Interest": {"source": "BDH", "field": "MINORITY_NONCONT_INT"},
-    # Cash Flow
-    "(Increase) Decrease in Accounts Receivable": {"source": "BDH", "field": "CF_CHG_ACCT_RCV"},
-    "(Increase) Decrease in Inventories": {"source": "BDH", "field": "CF_CHG_INVENTORIES"},
-    "Increase (Decrease) in Other": {"source": "BDH", "field": "CF_CHG_OTHER_CUR_ASSETS"},
-    "Stock Based Compensation": {"source": "BDH", "field": "CF_STOCK_BASED_COMP"},
-    "Other Operating Adjustments": {"source": "BDH", "field": "CF_OTHER_OPER_ADJUSTMENTS"},
-    "Operating Cash Flow": {"source": "BDH", "field": "CF_CASH_FROM_OPER"},
-    "Net Capex": {"source": "BDH", "field": "CF_CAP_EXPEND"},
-    "Acquisition of Fixed & Intangibles": {"source": "BDH", "field": "CF_CAPITAL_EXPEND"},
-    "Disposal of Fixed & Intangibles": {"source": "BDH", "field": "CF_DISPOSAL_PPE_INTAN"},
-    "Acquisitions": {"source": "BDH", "field": "CF_ACQUISITIONS"},
-    "Divestitures": {"source": "BDH", "field": "CF_DISPOSALS"},
-    "Increase in LT Investment": {"source": "BDH", "field": "CF_PURCH_LT_INVEST"},
-    "Decrease in LT Investment": {"source": "BDH", "field": "CF_SALE_LT_INVEST"},
-    "Other Investing Inflows (Outflows)": {"source": "BDH", "field": "CF_OTHER_INVEST_ACT"},
-    "Investing Cash Flow": {"source": "BDH", "field": "CF_CASH_FROM_INV_ACT"},
-    "Lease Payments": {"source": "BDH", "field": "CF_LEASE_PAYMENTS"},
-    "Debt Borrowing": {"source": "BDH", "field": "CF_LT_BORROW"},
-    "Debt Repayment": {"source": "BDH", "field": "CF_REPAY_LT_DEBT"},
-    "Dividends": {"source": "BDH", "field": "CF_CASH_DIV_PAID"},
-    "Increase (Repurchase) of Shares": {"source": "BDH", "field": "CF_SHARE_REPURCHASE"},
-    "Other Financing Inflows (Outflows)": {"source": "BDH", "field": "CF_OTHER_FIN_ACT"},
-    "Financing Cash Flow": {"source": "BDH", "field": "CF_CASH_FROM_FIN_ACT"},
-    "Effect of Foreign Exchange": {"source": "BDH", "field": "CF_FX_EFFECT"},
-    "Net Changes in Cash": {"source": "BDH", "field": "CF_NET_CHNG_CASH"},
-    # Capital Structure
-    "Market Capitalization": {"source": "BDH", "field": "CUR_MKT_CAP"},
-    "Cash & Cash Equivalents": {"source": "BDH", "field": "CASH_AND_EQUIV"},
-    "Total Debt": {"source": "BDH", "field": "TOT_DEBT"},
-    "Preferred Stock": {"source": "BDH", "field": "PREFERRED_EQUITY"},
-    "Non-Controlling Interest": {"source": "BDH", "field": "MINORITY_NONCONT_INT"},
-    "Enterprise Value": {"source": "BDH", "field": "ENTERPRISE_VALUE"},
-    # Additional
-    "Total Debt": {"source": "BDH", "field": "TOT_DEBT"},
-    "Total Borrowings": {"source": "BDH", "field": "TOT_BORROWINGS"},
-    "Total Leases": {"source": "BDH", "field": "TOT_LEASE_LIAB"},
-    "Net Debt": {"source": "BDH", "field": "NET_DEBT"},
-    "Effective Tax Rate": {"source": "BDH", "field": "EFF_TAX_RATE"},
-    "NOPAT": {"source": "BDH", "field": "NOPAT"},
-    # Derived Metrics
-    "Changes in Net Working Capital": {"source": "derived", "field": "Changes in Net Working Capital"},
-    "DSO": {"source": "derived", "field": "DSO"},
-    "DIH": {"source": "derived", "field": "DIH"},
-    "DPO": {"source": "derived", "field": "DPO"},
-    "Net Cash from Investments & Acquisitions": {"source": "derived", "field": "Net Cash from Investments & Acquisitions"}
-}
-
-# Fields requiring BDS or manual parsing
-bds_fields = {
-    # Placeholder for fields needing detailed parsing
-    # Example: "Increase (Decrease) in Other": {"source": "BDS", "field": "CF_STATEMENT_DETAIL"}
-}
+# Populate Excel with data
+def populate_excel(template_path, output_path, ticker, field_map, bdh_data, derived_data, start_year, end_year):
+    logger = logging.getLogger("bloomberg_valuation")
+    
+    try:
+        # Create a copy of the template
+        logger.info(f"Creating copy of template: {template_path}")
+        shutil.copy(template_path, output_path)
+        
+        # Load the workbook
+        logger.info(f"Loading workbook: {output_path}")
+        wb = openpyxl.load_workbook(output_path)
+        
+        # Check if Inputs sheet exists
+        if "Inputs" not in wb.sheetnames:
+            logger.error("Inputs sheet not found in template")
+            raise ValueError("Template does not contain 'Inputs' sheet")
+        
+        ws = wb["Inputs"]
+        
+        # Map of row labels to row numbers
+        logger.info("Mapping row labels to row numbers")
+        row_map = {}
+        for row in range(1, ws.max_row + 1):
+            cell_value = ws[f"A{row}"].value
+            if cell_value in field_map:
+                row_map[cell_value] = row
+        
+        # Generate year columns
+        year_columns = {year: chr(ord('A') + (year - start_year + 1)) for year in range(start_year, end_year + 1)}
+        cagr_column = chr(ord('A') + (end_year - start_year + 2))
+        
+        # Populate data
+        logger.info("Populating data into Excel")
+        for field, config in tqdm(field_map.items(), desc="Processing fields"):
+            if field not in row_map:
+                logger.warning(f"Field {field} not found in Inputs sheet")
+                continue
+                
+            row = row_map[field]
+            
+            # Select data source
+            if config["source"] == "BDH":
+                values = bdh_data.get(config["field"], {})
+                for year, col in year_columns.items():
+                    if year in values:
+                        try:
+                            # Convert to millions and handle potential errors
+                            value = values[year]
+                            if value is not None:
+                                ws[f"{col}{row}"] = value / 1000  # Convert to millions
+                        except Exception as e:
+                            logger.warning(f"Error setting value for {field} in {year}: {e}")
+                
+                # Calculate CAGR
+                start_value = values.get(start_year, 0)
+                end_value = values.get(end_year, 0)
+                if start_value and end_value:
+                    cagr = calculate_cagr(start_value, end_value, end_year - start_year)
+                    ws[f"{cagr_column}{row}"] = cagr / 100
+            
+            elif config["source"] == "derived":
+                values = derived_data[config["field"]]
+                for year, col in year_columns.items():
+                    if year in values:
+                        try:
+                            ws[f"{col}{row}"] = values[year]
+                        except Exception as e:
+                            logger.warning(f"Error setting derived value for {field} in {year}: {e}")
+                
+                # For CAGR of derived metrics, use different approach
+                years_with_data = [year for year in range(start_year, end_year + 1) if year in values]
+                if len(years_with_data) >= 2:
+                    first_year = min(years_with_data)
+                    last_year = max(years_with_data)
+                    start_value = values.get(first_year, 0)
+                    end_value = values.get(last_year, 0)
+                    if start_value and end_value:
+                        cagr = calculate_cagr(start_value, end_value, last_year - first_year)
+                        ws[f"{cagr_column}{row}"] = cagr / 100
+        
+        # Add metadata
+        metadata_row = ws.max_row + 2
+        ws[f"A{metadata_row}"] = "Metadata"
+        ws[f"A{metadata_row+1}"] = "Ticker"
+        ws[f"B{metadata_row+1}"] = ticker
+        ws[f"A{metadata_row+2}"] = "Generated On"
+        ws[f"B{metadata_row+2}"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        ws[f"A{metadata_row+3}"] = "Data Range"
+        ws[f"B{metadata_row+3}"] = f"{start_year}-{end_year}"
+        
+        # Save the workbook
+        logger.info(f"Saving workbook to {output_path}")
+        wb.save(output_path)
+        
+        return True
+    
+    except Exception as e:
+        logger.error(f"Error populating Excel: {e}")
+        return False
 
 # Main function
-def populate_valuation_model(template_path, ticker):
-    # Setup Bloomberg session
-    session = setup_bloomberg_session()
-    if not session:
-        return
+def populate_valuation_model(config, ticker):
+    logger = logging.getLogger("bloomberg_valuation")
+    logger.info(f"Starting valuation model population for {ticker}")
     
-    # Fetch BDH data
-    bdh_fields = [v["field"] for k, v in field_map.items() if v["source"] == "BDH"]
-    bdh_data = fetch_bloomberg_data(session, ticker, bdh_fields)
+    start_year = config["start_year"]
+    end_year = config["end_year"]
     
-    # Fetch BDS data (if needed)
-    bds_data = {}
-    for field, config in bds_fields.items():
-        bds_data[field] = fetch_bloomberg_bulk_data(session, ticker, config["field"], list(range(2014, 2025)))
+    # Create output directory
+    output_dir = "outputs"
+    os.makedirs(output_dir, exist_ok=True)
     
-    # Calculate derived metrics
-    derived_data = calculate_derived_metrics(bdh_data)
+    # Create cache directory
+    os.makedirs(config["cache_dir"], exist_ok=True)
     
-    # Create a copy of the template
-    output_path = f"{ticker}_valuation_model.xlsx"
-    shutil.copy(template_path, output_path)
+    # Define output path
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    output_path = os.path.join(output_dir, f"{ticker}_valuation_model_{timestamp}.xlsx")
     
-    # Load the workbook
-    wb = openpyxl.load_workbook(output_path)
-    ws = wb["Inputs"]
+    # Import field map here to avoid defining it multiple times
+    from field_map import field_map
     
-    # Map of row labels to row numbers
-    row_map = {}
-    for row in range(1, ws.max_row + 1):
-        cell_value = ws[f"A{row}"].value
-        if cell_value in field_map:
-            row_map[cell_value] = row
+    # Check for cached data
+    cached_data = get_cached_data(ticker, start_year, end_year, 
+                                 config["cache_dir"], config["cache_max_age_days"])
     
-    # Populate data
-    year_columns = {2014: "B", 2015: "C", 2016: "D", 2017: "E", 2018: "F",
-                    2019: "G", 2020: "H", 2021: "I", 2022: "J", 2023: "K", 2024: "L"}
-    cagr_column = "M"
-    
-    for field, config in field_map.items():
-        if field not in row_map:
-            print(f"Field {field} not found in Inputs sheet.")
-            continue
-        row = row_map[field]
+    if cached_data:
+        logger.info("Using cached data")
+        bdh_data = cached_data["bdh_data"]
+        derived_data = cached_data["derived_data"]
+    else:
+        # Setup Bloomberg session
+        session = setup_bloomberg_session(config["bloomberg_host"], config["bloomberg_port"])
+        if not session:
+            logger.error("Failed to create Bloomberg session")
+            return False
         
-        # Select data source
-        if config["source"] == "BDH":
-            values = bdh_data.get(config["field"], {})
-            for year, col in year_columns.items():
-                if year in values:
-                    ws[f"{col}{row}"] = values[year] / 1000  # Convert to millions
-            start_value = values.get(2014, 0)
-            end_value = values.get(2024, 0)
-        elif config["source"] == "BDS":
-            values = bds_data.get(field, {})
-            for year, col in year_columns.items():
-                if year in values:
-                    ws[f"{col}{row}"] = values[year] / 1000
-            start_value = values.get(2014, 0)
-            end_value = values.get(2024, 0)
-        elif config["source"] == "derived":
-            values = derived_data[config["field"]]
-            for year, col in year_columns.items():
-                if year in values:
-                    ws[f"{col}{row}"] = values[year]
-            start_value = values.get(2014, 0)
-            end_value = values.get(2024, 0)
+        try:
+            # Get fields to fetch from field_map
+            bdh_fields = [v["field"] for k, v in field_map.items() if v["source"] == "BDH"]
+            
+            # Fetch BDH data
+            bdh_data = fetch_bloomberg_data(session, ticker, bdh_fields, start_year, end_year)
+            
+            # Validate and clean data
+            bdh_data = validate_and_clean_data(bdh_data)
+            
+            # Calculate derived metrics
+            derived_data = calculate_derived_metrics(bdh_data, start_year, end_year)
+            
+            # Cache the data
+            cache_data(ticker, start_year, end_year, bdh_data, derived_data, config["cache_dir"])
         
-        # Calculate CAGR
-        if start_value and end_value:
-            cagr = calculate_cagr(start_value, end_value, 10)
-            ws[f"{cagr_column}{row}"] = cagr / 100
+        except Exception as e:
+            logger.error(f"Error processing Bloomberg data: {e}")
+            return False
+        finally:
+            # Close Bloomberg session
+            logger.info("Closing Bloomberg session")
+            session.stop()
     
-    # Save the workbook
-    wb.save(output_path)
-    print(f"Valuation model saved as {output_path}")
+    # Populate Excel with data
+    success = populate_excel(
+        config["template_path"], 
+        output_path, 
+        ticker, 
+        field_map, 
+        bdh_data, 
+        derived_data,
+        start_year,
+        end_year
+    )
     
-    # Close Bloomberg session
-    session.stop()
+    if success:
+        logger.info(f"Valuation model successfully saved as {output_path}")
+        return True
+    else:
+        logger.error("Failed to populate valuation model")
+        return False
 
-# Run the program
+# Command line interface
+def parse_arguments():
+    parser = argparse.ArgumentParser(description='Bloomberg Valuation Model Data Extractor')
+    parser.add_argument('ticker', help='Ticker symbol (e.g., AAPL)')
+    parser.add_argument('--template', help='Path to template Excel file')
+    parser.add_argument('--config', help='Path to configuration JSON file')
+    parser.add_argument('--start-year', type=int, help='Start year for historical data')
+    parser.add_argument('--end-year', type=int, help='End year for historical data')
+    parser.add_argument('--no-cache', action='store_true', help='Ignore cached data')
+    return parser.parse_args()
+
+# Entry point
 if __name__ == "__main__":
-    template_path = "LIS_Valuation_Empty.xlsx"
-    ticker = input("Enter the ticker symbol (e.g., AAPL): ").strip().upper()
-    populate_valuation_model(template_path, ticker)
+    # Setup logging
+    logger = setup_logging()
+    
+    # Parse command line arguments
+    args = parse_arguments()
+    
+    # Load configuration
+    config = load_config(args.config)
+    
+    # Override config with command line arguments
+    if args.template:
+        config["template_path"] = args.template
+    if args.start_year:
+        config["start_year"] = args.start_year
+    if args.end_year:
+        config["end_year"] = args.end_year
+    if args.no_cache:
+        config["cache_max_age_days"] = -1  # Disable cache
+    
+    # Run the program
+    success = populate_valuation_model(config, args.ticker)
+    
+    if success:
+        logger.info("Program completed successfully")
+    else:
+        logger.error("Program failed")
+        import sys
+        sys.exit(1)
