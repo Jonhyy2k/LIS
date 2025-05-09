@@ -3,29 +3,31 @@ import openpyxl
 import shutil
 import os
 import numpy as np
+import time
 from datetime import datetime
 
-# Bloomberg API setup
-def setup_bloomberg_session():
-    """Initialize Bloomberg API session."""
+def setup_bloomberg_session(ticker_symbol):
+    """Initialize Bloomberg API session with detailed logging."""
     options = blpapi.SessionOptions()
     options.setServerHost("localhost")
     options.setServerPort(8194)
     session = blpapi.Session(options)
+    
+    print(f"[INFO] Attempting to connect to Bloomberg for {ticker_symbol}...")
     if not session.start():
-        print("Failed to start Bloomberg session.")
+        print("[WARNING] Failed to start Bloomberg session. Ensure Bloomberg Terminal is running.")
         return None
     if not session.openService("//blp/refdata"):
-        print("Failed to open Bloomberg reference data service.")
+        print("[WARNING] Failed to open Bloomberg reference data service.")
         return None
+    print("[INFO] Bloomberg session started successfully.")
     return session
 
-# Fetch historical data (BDH)
-def fetch_bloomberg_data(session, ticker, fields, start_year=2014, end_year=2024):
-    """Fetch historical data from Bloomberg for the given ticker and fields."""
+def fetch_bloomberg_data(session, ticker, fields, start_year=2014, end_year=2024, timeout=10):
+    """Fetch historical data from Bloomberg with timeout and error handling."""
     ref_data_service = session.getService("//blp/refdata")
     request = ref_data_service.createRequest("HistoricalDataRequest")
-    security = f"{ticker} US Equity"
+    security = f"{ticker} US Equity"  # Adapt for non-US equities if needed (e.g., 'LN Equity')
     request.getElement("securities").appendValue(security)
     for field in fields:
         request.getElement("fields").appendValue(field)
@@ -35,10 +37,20 @@ def fetch_bloomberg_data(session, ticker, fields, start_year=2014, end_year=2024
     session.sendRequest(request)
     
     data = {field: {} for field in fields}
-    while True:
-        event = session.nextEvent()
-        if event.eventType() == blpapi.Event.RESPONSE or event.eventType() == blpapi.Event.PARTIAL_RESPONSE:
+    start_time = time.time()
+    
+    while time.time() - start_time < timeout:
+        event = session.nextEvent(500)  # Check every 500ms
+        if event.eventType() in [blpapi.Event.RESPONSE, blpapi.Event.PARTIAL_RESPONSE]:
             for msg in event:
+                print(f"[DEBUG] Received message: {msg}")
+                if msg.hasElement("responseError"):
+                    error = msg.getElement("responseError")
+                    error_message = error.getElement("message").getValue()
+                    raise ValueError(f"Bloomberg API error: {error_message}")
+                if not msg.hasElement("securityData"):
+                    raise ValueError("No securityData element in response. Check ticker or data availability.")
+                
                 security_data = msg.getElement("securityData")
                 field_data = security_data.getElement("fieldData")
                 for i in range(field_data.numValues()):
@@ -49,11 +61,21 @@ def fetch_bloomberg_data(session, ticker, fields, start_year=2014, end_year=2024
                         if datum.hasElement(field):
                             value = datum.getElement(field).getValue()
                             data[field][year] = value
+        elif event.eventType() in [blpapi.Event.SESSION_STATUS, blpapi.Event.SERVICE_STATUS]:
+            for msg in event:
+                if msg.messageType() == blpapi.Name("SessionTerminated"):
+                    print("[WARNING] Bloomberg session terminated unexpectedly.")
+                    return None
+        elif event.eventType() == blpapi.Event.TIMEOUT:
+            print("[DEBUG] Bloomberg event timeout.")
+            continue
         if event.eventType() == blpapi.Event.RESPONSE:
             break
+    
+    if not any(data[field] for field in data):
+        print(f"[WARNING] No data received for {ticker} within {timeout}s.")
     return data
 
-# Calculate derived metrics
 def calculate_derived_metrics(data, start_year=2014, end_year=2024):
     """Calculate derived metrics like DSO, DIH, DPO, and Net Working Capital changes."""
     derived = {
@@ -66,17 +88,15 @@ def calculate_derived_metrics(data, start_year=2014, end_year=2024):
     }
     
     for year in range(start_year, end_year + 1):
-        # Changes in Net Working Capital
-        if year in data["TOT_CUR_ASSETS"] and year in data["TOT_CUR_LIAB"] and \
-           year - 1 in data["TOT_CUR_ASSETS"] and year - 1 in data["TOT_CUR_LIAB"]:
+        if year in data.get("TOT_CUR_ASSETS", {}) and year in data.get("TOT_CUR_LIAB", {}) and \
+           year - 1 in data.get("TOT_CUR_ASSETS", {}) and year - 1 in data.get("TOT_CUR_LIAB", {}):
             nwc_t = data["TOT_CUR_ASSETS"][year] - data["TOT_CUR_LIAB"][year]
             nwc_t1 = data["TOT_CUR_ASSETS"][year - 1] - data["TOT_CUR_LIAB"][year - 1]
             derived["Changes in Net Working Capital"][year] = nwc_t - nwc_t1
         
-        # DSO, DIH, DPO
-        if year in data["ACCT_RCV"] and year in data["SALES_REV_TURN"] and \
-           year in data["INVENTORIES"] and year in data["COGS"] and \
-           year in data["ACCT_PAYABLE"]:
+        if year in data.get("ACCT_RCV", {}) and year in data.get("SALES_REV_TURN", {}) and \
+           year in data.get("INVENTORIES", {}) and year in data.get("COGS", {}) and \
+           year in data.get("ACCT_PAYABLE", {}):
             revenue = data["SALES_REV_TURN"][year]
             cogs = data["COGS"][year]
             ar = data["ACCT_RCV"][year]
@@ -86,19 +106,17 @@ def calculate_derived_metrics(data, start_year=2014, end_year=2024):
             derived["DIH"][year] = (inv / cogs * 365) if cogs else 0
             derived["DPO"][year] = (ap / cogs * 365) if cogs else 0
         
-        # Net Cash from Investments & Acquisitions
-        if year in data["CF_ACQUISITIONS"] and year in data["CF_DISPOSALS"] and \
-           year in data["CF_OTHER_INVEST_ACT"]:
+        if year in data.get("CF_ACQUISITIONS", {}) and year in data.get("CF_DISPOSALS", {}) and \
+           year in data.get("CF_OTHER_INVEST_ACT", {}):
             derived["Net Cash from Investments & Acquisitions"][year] = (
                 data["CF_ACQUISITIONS"][year] +
                 data["CF_DISPOSALS"][year] +
                 data["CF_OTHER_INVEST_ACT"][year]
             )
         
-        # Increase (Decrease) in Other (approximated as residual of working capital changes)
         if year in derived["Changes in Net Working Capital"] and \
-           year in data["CF_CHG_ACCT_RCV"] and year in data["CF_CHG_INVENTORIES"] and \
-           year in data["CF_CHG_ACCT_PAYABLE"]:
+           year in data.get("CF_CHG_ACCT_RCV", {}) and year in data.get("CF_CHG_INVENTORIES", {}) and \
+           year in data.get("CF_CHG_ACCT_PAYABLE", {}):
             derived["Increase (Decrease) in Other"][year] = (
                 derived["Changes in Net Working Capital"][year] -
                 (data["CF_CHG_ACCT_RCV"][year] +
@@ -108,14 +126,13 @@ def calculate_derived_metrics(data, start_year=2014, end_year=2024):
     
     return derived
 
-# Calculate CAGR
 def calculate_cagr(start_value, end_value, years):
     """Calculate Compound Annual Growth Rate."""
     if start_value == 0 or end_value == 0 or years <= 0:
         return 0
     return ((end_value / start_value) ** (1 / years) - 1) * 100
 
-# Field map for all required fields
+# Full field map for all required fields
 field_map = {
     # Income Statement
     "Revenue (Sales)": {"source": "BDH", "field": "SALES_REV_TURN"},
@@ -218,95 +235,87 @@ field_map = {
     "Net Cash from Investments & Acquisitions": {"source": "derived", "field": "Net Cash from Investments & Acquisitions"}
 }
 
-# Main function to populate the valuation model
 def populate_valuation_model(template_path, ticker):
     """Populate the Inputs sheet with Bloomberg data for the given ticker."""
-    # Validate template file existence
     if not os.path.exists(template_path):
         raise FileNotFoundError(f"Template file {template_path} not found.")
     
-    # Setup Bloomberg session
-    session = setup_bloomberg_session()
+    session = setup_bloomberg_session(ticker)
     if not session:
         return
     
-    # Fetch BDH data
-    bdh_fields = [v["field"] for k, v in field_map.items() if v["source"] == "BDH"]
-    bdh_data = fetch_bloomberg_data(session, ticker, bdh_fields)
-    
-    # Calculate derived metrics
-    derived_data = calculate_derived_metrics(bdh_data)
-    
-    # Create a copy of the template
-    output_path = f"{ticker}_valuation_model.xlsx"
-    shutil.copy(template_path, output_path)
-    
-    # Load the workbook
-    wb = openpyxl.load_workbook(output_path)
-    if "Inputs" not in wb.sheetnames:
-        raise ValueError("Inputs sheet not found in the template file.")
-    ws = wb["Inputs"]
-    
-    # Map of row labels to row numbers
-    row_map = {}
-    for row in range(1, ws.max_row + 1):
-        cell_value = ws[f"A{row}"].value
-        if cell_value and cell_value in field_map:
-            row_map[cell_value] = row
-    
-    # Populate data
-    year_columns = {2014: "B", 2015: "C", 2016: "D", 2017: "E", 2018: "F",
-                    2019: "G", 2020: "H", 2021: "I", 2022: "J", 2023: "K", 2024: "L"}
-    cagr_column = "M"
-    
-    for field, config in field_map.items():
-        if field not in row_map:
-            print(f"Field '{field}' not found in Inputs sheet.")
-            continue
-        row = row_map[field]
+    try:
+        bdh_fields = [v["field"] for k, v in field_map.items() if v["source"] == "BDH"]
+        bdh_data = fetch_bloomberg_data(session, ticker, bdh_fields)
         
-        # Select data source
-        if config["source"] == "BDH":
-            values = bdh_data.get(config["field"], {})
-            for year, col in year_columns.items():
-                if year in values:
-                    ws[f"{col}{row}"] = values[year] / 1000  # Convert to millions
-            start_value = values.get(2014, 0)
-            end_value = values.get(2024, 0)
-        elif config["source"] == "derived":
-            values = derived_data[config["field"]]
-            for year, col in year_columns.items():
-                if year in values:
-                    ws[f"{col}{row}"] = values[year]
-            start_value = values.get(2014, 0)
-            end_value = values.get(2024, 0)
+        derived_data = calculate_derived_metrics(bdh_data)
         
-        # Calculate CAGR
-        if start_value and end_value:
-            cagr = calculate_cagr(start_value, end_value, 10)
-            ws[f"{cagr_column}{row}"] = cagr / 100
+        output_path = f"{ticker}_valuation_model.xlsx"
+        shutil.copy(template_path, output_path)
+        
+        wb = openpyxl.load_workbook(output_path)
+        if "Inputs" not in wb.sheetnames:
+            raise ValueError("Inputs sheet not found in the template file.")
+        ws = wb["Inputs"]
+        
+        row_map = {}
+        for row in range(1, ws.max_row + 1):
+            cell_value = ws[f"A{row}"].value
+            if cell_value and cell_value in field_map:
+                row_map[cell_value] = row
+        
+        year_columns = {2014: "B", 2015: "C", 2016: "D", 2017: "E", 2018: "F",
+                        2019: "G", 2020: "H", 2021: "I", 2022: "J", 2023: "K", 2024: "L"}
+        cagr_column = "M"
+        
+        for field, config in field_map.items():
+            if field not in row_map:
+                print(f"[WARNING] Field '{field}' not found in Inputs sheet.")
+                continue
+            row = row_map[field]
+            
+            if config["source"] == "BDH":
+                values = bdh_data.get(config["field"], {})
+                for year, col in year_columns.items():
+                    if year in values:
+                        ws[f"{col}{row}"] = values[year] / 1000  # Convert to millions
+                start_value = values.get(2014, 0)
+                end_value = values.get(2024, 0)
+            elif config["source"] == "derived":
+                values = derived_data[config["field"]]
+                for year, col in year_columns.items():
+                    if year in values:
+                        ws[f"{col}{row}"] = values[year]
+                start_value = values.get(2014, 0)
+                end_value = values.get(2024, 0)
+            
+            if start_value and end_value:
+                cagr = calculate_cagr(start_value, end_value, 10)
+                ws[f"{cagr_column}{row}"] = cagr / 100
+        
+        wb.save(output_path)
+        print(f"[INFO] Valuation model saved as {output_path}")
     
-    # Save the workbook
-    wb.save(output_path)
-    print(f"Valuation model saved as {output_path}")
+    except Exception as e:
+        print(f"[ERROR] Error during Bloomberg API interaction for {ticker}: {e}")
     
-    # Close Bloomberg session
-    session.stop()
+    finally:
+        try:
+            session.stop()
+            print("[INFO] Bloomberg session stopped.")
+        except Exception as e:
+            print(f"[WARNING] Error stopping Bloomberg session: {e}")
 
-# Run the program
 if __name__ == "__main__":
-    # Define template path (assumes file is in the same directory as script)
     template_path = "LIS_Valuation_Empty.xlsx"
     
-    # Prompt for ticker and validate input
     ticker = input("Enter the ticker symbol (e.g., AAPL): ").strip().upper()
     if not ticker:
-        raise ValueError("Ticker symbol cannot be empty.")
-    if not ticker.isalnum():
-        raise ValueError("Ticker symbol must contain only letters and numbers.")
-    
-    # Run the valuation model population
-    try:
-        populate_valuation_model(template_path, ticker)
-    except Exception as e:
-        print(f"An error occurred: {e}")
+        print("[ERROR] Ticker symbol cannot be empty.")
+    elif not ticker.isalnum():
+        print("[ERROR] Ticker symbol must contain only letters and numbers.")
+    else:
+        try:
+            populate_valuation_model(template_path, ticker)
+        except Exception as e:
+            print(f"[ERROR] An error occurred: {e}")
