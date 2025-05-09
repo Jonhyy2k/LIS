@@ -23,14 +23,14 @@ def setup_bloomberg_session(ticker_symbol):
     print("[INFO] Bloomberg session started successfully.")
     return session
 
-def fetch_bloomberg_data(session, ticker, fields, start_year=2014, end_year=2024, timeout=10):
+def fetch_bloomberg_data(session, ticker, fields, field_to_name_map, start_year=2014, end_year=2024, timeout=10):
     """Fetch historical data from Bloomberg with timeout and error handling."""
     if len(fields) > 25:
         raise ValueError(f"Too many fields ({len(fields)}). Bloomberg API limit is 25 fields per request.")
     
     ref_data_service = session.getService("//blp/refdata")
     request = ref_data_service.createRequest("HistoricalDataRequest")
-    security = f"{ticker} US Equity"  # Adapt for non-US equities if needed (e.g., 'LN Equity')
+    security = f"{ticker} US Equity"
     request.getElement("securities").appendValue(security)
     for field in fields:
         request.getElement("fields").appendValue(field)
@@ -40,6 +40,7 @@ def fetch_bloomberg_data(session, ticker, fields, start_year=2014, end_year=2024
     session.sendRequest(request)
     
     data = {field: {} for field in fields}
+    invalid_fields = []
     start_time = time.time()
     
     while time.time() - start_time < timeout:
@@ -55,12 +56,23 @@ def fetch_bloomberg_data(session, ticker, fields, start_year=2014, end_year=2024
                     raise ValueError("No securityData element in response. Check ticker or data availability.")
                 
                 security_data = msg.getElement("securityData")
+                if security_data.hasElement("fieldExceptions"):
+                    field_exceptions = security_data.getElement("fieldExceptions")
+                    for i in range(field_exceptions.numValues()):
+                        field_error = field_exceptions.getValue(i)
+                        invalid_field = field_error.getElement("fieldId").getValue()
+                        field_name = field_to_name_map.get(invalid_field, "Unknown Field")
+                        invalid_fields.append(invalid_field)
+                        print(f"[WARNING] Invalid Bloomberg field detected: {invalid_field} (for '{field_name}')")
+                
                 field_data = security_data.getElement("fieldData")
                 for i in range(field_data.numValues()):
                     datum = field_data.getValue(i)
                     date = datum.getElement("date").getValue()
                     year = date.year
                     for field in fields:
+                        if field in invalid_fields:
+                            continue
                         if datum.hasElement(field):
                             value = datum.getElement(field).getValue()
                             data[field][year] = value
@@ -77,6 +89,8 @@ def fetch_bloomberg_data(session, ticker, fields, start_year=2014, end_year=2024
     
     if not any(data[field] for field in data):
         print(f"[WARNING] No data received for {ticker} within {timeout}s.")
+    if invalid_fields:
+        print(f"[INFO] Bloomberg fields skipped due to invalidity: {invalid_fields}")
     return data
 
 def calculate_derived_metrics(data, start_year=2014, end_year=2024):
@@ -98,10 +112,10 @@ def calculate_derived_metrics(data, start_year=2014, end_year=2024):
             derived["Changes in Net Working Capital"][year] = nwc_t - nwc_t1
         
         if year in data.get("ACCT_RCV", {}) and year in data.get("SALES_REV_TURN", {}) and \
-           year in data.get("INVENTORIES", {}) and year in data.get("COGS", {}) and \
+           year in data.get("INVENTORIES", {}) and year in data.get("IS_COGS", {}) and \
            year in data.get("ACCT_PAYABLE", {}):
             revenue = data["SALES_REV_TURN"][year]
-            cogs = data["COGS"][year]
+            cogs = data["IS_COGS"][year]
             ar = data["ACCT_RCV"][year]
             inv = data["INVENTORIES"][year]
             ap = data["ACCT_PAYABLE"][year]
@@ -137,11 +151,11 @@ def calculate_cagr(start_value, end_value, years):
 
 # Segmented field map
 field_map = {
-    # Income Statement (IS) - 23 fields
+    # Income Statement (IS)
     "Revenue (Sales)": {"source": "BDH", "field": "SALES_REV_TURN", "statement": "IS"},
-    "COGS (Cost of Goods Sold)": {"source": "BDH", "field": "COGS", "statement": "IS"},
+    "COGS (Cost of Goods Sold)": {"source": "BDH", "field": "IS_COGS", "statement": "IS"},
     "Gross Profit": {"source": "BDH", "field": "GROSS_PROFIT", "statement": "IS"},
-    "SG&A (Selling, General & Administrative)": {"source": "BDH", "field": "SGA_EXP", "statement": "IS"},
+    "SG&A (Selling, General & Administrative)": {"source": "BDH", "field": "SELL_GEN_ADMIN_EXP", "statement": "IS"},
     "R&D (Research & Development)": {"source": "BDH", "field": "RD_EXP", "statement": "IS"},
     "Other Operating (Income) Expenses": {"source": "BDH", "field": "IS_OTHER_OPER_EXP", "statement": "IS"},
     "EBITDA": {"source": "BDH", "field": "EBITDA", "statement": "IS"},
@@ -161,7 +175,7 @@ field_map = {
     "EPS Diluted": {"source": "BDH", "field": "DILUTED_EPS", "statement": "IS"},
     "Basic Weighted Average Shares": {"source": "BDH", "field": "BASIC_AVG_SHS", "statement": "IS"},
     "Diluted Weighted Average Shares": {"source": "BDH", "field": "DILUTED_AVG_SHS", "statement": "IS"},
-    # Balance Sheet (BS) - 24 fields (trimmed to fit under 25)
+    # Balance Sheet (BS)
     "Cash & Cash Equivalents & ST Investments": {"source": "BDH", "field": "CASH_AND_ST_INVEST", "statement": "BS"},
     "Cash & Cash Equivalents": {"source": "BDH", "field": "CASH_AND_EQUIV", "statement": "BS"},
     "Short-Term Investments": {"source": "BDH", "field": "ST_INVEST", "statement": "BS"},
@@ -186,30 +200,31 @@ field_map = {
     "Accrued Expenses and Other Current Liabilities": {"source": "BDH", "field": "OTH_CUR_LIAB", "statement": "BS"},
     "Current Liabilities": {"source": "BDH", "field": "TOT_CUR_LIAB", "statement": "BS"},
     "Long-Term Debt": {"source": "BDH", "field": "LT_DEBT", "statement": "BS"},
-    # Cash Flow Statement (CF) - 22 fields
-    "(Increase) Decrease in Accounts Receivable": {"source": "BDH", "field": "CF_CHG_ACCT_RCV", "statement": "CF"},
-    "(Increase) Decrease in Inventories": {"source": "BDH", "field": "CF_CHG_INVENTORIES", "statement": "CF"},
-    "Stock Based Compensation": {"source": "BDH", "field": "CF_STOCK_BASED_COMP", "statement": "CF"},
-    "Other Operating Adjustments": {"source": "BDH", "field": "CF_OTHER_OPER_ADJUSTMENTS", "statement": "CF"},
-    "Operating Cash Flow": {"source": "BDH", "field": "CF_CASH_FROM_OPER", "statement": "CF"},
-    "Net Capex": {"source": "BDH", "field": "CF_CAP_EXPEND", "statement": "CF"},
-    "Acquisition of Fixed & Intangibles": {"source": "BDH", "field": "CF_CAPITAL_EXPEND", "statement": "CF"},
-    "Disposal of Fixed & Intangibles": {"source": "BDH", "field": "CF_DISPOSAL_PPE_INTAN", "statement": "CF"},
-    "Acquisitions": {"source": "BDH", "field": "CF_ACQUISITIONS", "statement": "CF"},
-    "Divestitures": {"source": "BDH", "field": "CF_DISPOSALS", "statement": "CF"},
-    "Increase in LT Investment": {"source": "BDH", "field": "CF_PURCH_LT_INVEST", "statement": "CF"},
-    "Decrease in LT Investment": {"source": "BDH", "field": "CF_SALE_LT_INVEST", "statement": "CF"},
-    "Other Investing Inflows (Outflows)": {"source": "BDH", "field": "CF_OTHER_INVEST_ACT", "statement": "CF"},
-    "Investing Cash Flow": {"source": "BDH", "field": "CF_CASH_FROM_INV_ACT", "statement": "CF"},
-    "Lease Payments": {"source": "BDH", "field": "CF_LEASE_PAYMENTS", "statement": "CF"},
-    "Debt Borrowing": {"source": "BDH", "field": "CF_LT_BORROW", "statement": "CF"},
-    "Debt Repayment": {"source": "BDH", "field": "CF_REPAY_LT_DEBT", "statement": "CF"},
-    "Dividends": {"source": "BDH", "field": "CF_CASH_DIV_PAID", "statement": "CF"},
-    "Increase (Repurchase) of Shares": {"source": "BDH", "field": "CF_SHARE_REPURCHASE", "statement": "CF"},
-    "Other Financing Inflows (Outflows)": {"source": "BDH", "field": "CF_OTHER_FIN_ACT", "statement": "CF"},
-    "Financing Cash Flow": {"source": "BDH", "field": "CF_CASH_FROM_FIN_ACT", "statement": "CF"},
-    "Effect of Foreign Exchange": {"source": "BDH", "field": "CF_FX_EFFECT", "statement": "CF"},
-    # Additional Fields (grouped with BS for capital structure) - 9 fields
+    # Cash Flow Statement (CF)
+    "Net Income": {"source": "BDH", "field": "NET_INCOME", "statement": "CF", "section": "Operating"},
+    "(Increase) Decrease in Accounts Receivable": {"source": "BDH", "field": "CF_CHG_ACCT_RCV", "statement": "CF", "section": "Operating"},
+    "(Increase) Decrease in Inventories": {"source": "BDH", "field": "CF_CHG_INVENTORIES", "statement": "CF", "section": "Operating"},
+    "Stock Based Compensation": {"source": "BDH", "field": "CF_STOCK_BASED_COMP", "statement": "CF", "section": "Operating"},
+    "Other Operating Adjustments": {"source": "BDH", "field": "CF_OTHER_OPER_ADJUSTMENTS", "statement": "CF", "section": "Operating"},
+    "Operating Cash Flow": {"source": "BDH", "field": "CF_CASH_FROM_OPER", "statement": "CF", "section": "Operating"},
+    "Net Capex": {"source": "BDH", "field": "CF_CAP_EXPEND", "statement": "CF", "section": "Investing"},
+    "Acquisition of Fixed & Intangibles": {"source": "BDH", "field": "CF_CAPITAL_EXPEND", "statement": "CF", "section": "Investing"},
+    "Disposal of Fixed & Intangibles": {"source": "BDH", "field": "CF_DISPOSAL_PPE_INTAN", "statement": "CF", "section": "Investing"},
+    "Acquisitions": {"source": "BDH", "field": "CF_ACQUISITIONS", "statement": "CF", "section": "Investing"},
+    "Divestitures": {"source": "BDH", "field": "CF_DISPOSALS", "statement": "CF", "section": "Investing"},
+    "Increase in LT Investment": {"source": "BDH", "field": "CF_PURCH_LT_INVEST", "statement": "CF", "section": "Investing"},
+    "Decrease in LT Investment": {"source": "BDH", "field": "CF_SALE_LT_INVEST", "statement": "CF", "section": "Investing"},
+    "Other Investing Inflows (Outflows)": {"source": "BDH", "field": "CF_OTHER_INVEST_ACT", "statement": "CF", "section": "Investing"},
+    "Investing Cash Flow": {"source": "BDH", "field": "CF_CASH_FROM_INV_ACT", "statement": "CF", "section": "Investing"},
+    "Lease Payments": {"source": "BDH", "field": "CF_LEASE_PAYMENTS", "statement": "CF", "section": "Financing"},
+    "Debt Borrowing": {"source": "BDH", "field": "CF_LT_BORROW", "statement": "CF", "section": "Financing"},
+    "Debt Repayment": {"source": "BDH", "field": "CF_REPAY_LT_DEBT", "statement": "CF", "section": "Financing"},
+    "Dividends": {"source": "BDH", "field": "CF_CASH_DIV_PAID", "statement": "CF", "section": "Financing"},
+    "Increase (Repurchase) of Shares": {"source": "BDH", "field": "CF_SHARE_REPURCHASE", "statement": "CF", "section": "Financing"},
+    "Other Financing Inflows (Outflows)": {"source": "BDH", "field": "CF_OTHER_FIN_ACT", "statement": "CF", "section": "Financing"},
+    "Financing Cash Flow": {"source": "BDH", "field": "CF_CASH_FROM_FIN_ACT", "statement": "CF", "section": "Financing"},
+    "Effect of Foreign Exchange": {"source": "BDH", "field": "CF_FX_EFFECT", "statement": "CF", "section": "All"},
+    # Additional Fields (BS)
     "Market Capitalization": {"source": "BDH", "field": "CUR_MKT_CAP", "statement": "BS"},
     "Total Debt": {"source": "BDH", "field": "TOT_DEBT", "statement": "BS"},
     "Preferred Stock": {"source": "BDH", "field": "PREFERRED_EQUITY", "statement": "BS"},
@@ -219,29 +234,132 @@ field_map = {
     "Total Leases": {"source": "BDH", "field": "TOT_LEASE_LIAB", "statement": "BS"},
     "Net Debt": {"source": "BDH", "field": "NET_DEBT", "statement": "BS"},
     "Effective Tax Rate": {"source": "BDH", "field": "EFF_TAX_RATE", "statement": "BS"},
-    # Derived Metrics (included when dependencies are met)
+    # Derived Metrics
     "Changes in Net Working Capital": {"source": "derived", "field": "Changes in Net Working Capital", "statement": "BS"},
     "DSO": {"source": "derived", "field": "DSO", "statement": "IS"},
     "DIH": {"source": "derived", "field": "DIH", "statement": "BS"},
     "DPO": {"source": "derived", "field": "DPO", "statement": "BS"},
-    "Net Cash from Investments & Acquisitions": {"source": "derived", "field": "Net Cash from Investments & Acquisitions", "statement": "CF"},
-    "Increase (Decrease) in Other": {"source": "derived", "field": "Increase (Decrease) in Other", "statement": "CF"}
+    "Net Cash from Investments & Acquisitions": {"source": "derived", "field": "Net Cash from Investments & Acquisitions", "statement": "CF", "section": "Investing"},
+    "Increase (Decrease) in Other": {"source": "derived", "field": "Increase (Decrease) in Other", "statement": "CF", "section": "Operating"}
 }
 
-def filter_field_map(statement):
-    """Filter field_map to include only fields for the selected statement."""
+# Manual cell mapping for 2014 data
+field_cell_map = {
+    # Income Statement (IS)
+    "Revenue (Sales)": "G6",
+    "COGS (Cost of Goods Sold)": "G7",
+    "Gross Profit": "G8",
+    "SG&A (Selling, General & Administrative)": "G9",
+    "R&D (Research & Development)": "G10",
+    "Other Operating (Income) Expenses": "G11",
+    "EBITDA": "G12",
+    "D&A (Depreciation & Amortization)": "G13",
+    "Depreciation Expense": "G14",
+    "Amortization Expense": "G15",
+    "Operating Income (EBIT)": "G16",
+    "Net Interest Expense (Income)": "G17",
+    "Interest Expense": "G18",
+    "Interest Income": "G19",
+    "FX (Gain) Loss": "G20",
+    "Other Non-Operating (Income) Expenses": "G21",
+    "Pre-Tax Income (EBT)": "G22",
+    "Tax Expense (Benefits)": "G23",
+    "Net Income": "G24",
+    "EPS Basic": "G25",
+    "EPS Diluted": "G26",
+    "Basic Weighted Average Shares": "G27",
+    "Diluted Weighted Average Shares": "G28",
+    # Balance Sheet (BS)
+    "Cash & Cash Equivalents & ST Investments": "G32",
+    "Cash & Cash Equivalents": "G33",
+    "Short-Term Investments": "G34",
+    "Accounts Receivable": "G35",
+    "Inventory": "G36",
+    "Prepaid Expenses and Other Current Assets": "G37",
+    "Current Assets": "G38",
+    "Net PP&E (Property, Plant and Equipment)": "G39",
+    "Gross PP&E (Property, Plant and Equipment)": "G40",
+    "Accumulated Depreciation": "G41",
+    "Right-of-Use Assets": "G42",
+    "Intangibles": "G43",
+    "Goodwill": "G44",
+    "Intangibles excl. Goodwill": "G45",
+    "Other Non-Current Assets": "G46",
+    "Non-Current Assets": "G47",
+    "Total Assets": "G48",
+    "Accounts Payable": "G49",
+    "Short-Term Debt": "G50",
+    "Short-Term Borrowings": "G50",
+    "Current Portion of Lease Liabilities": "G51",
+    "Accrued Expenses and Other Current Liabilities": "G52",
+    "Current Liabilities": "G53",
+    "Long-Term Debt": "G54",
+    # Cash Flow Statement (CF)
+    "Net Income": "G66",
+    "(Increase) Decrease in Accounts Receivable": "G67",
+    "(Increase) Decrease in Inventories": "G68",
+    "Stock Based Compensation": "G69",
+    "Other Operating Adjustments": "G70",
+    "Operating Cash Flow": "G71",
+    "Increase (Decrease) in Other": "G72",
+    "Net Capex": "G73",
+    "Acquisition of Fixed & Intangibles": "G74",
+    "Disposal of Fixed & Intangibles": "G75",
+    "Acquisitions": "G76",
+    "Divestitures": "G77",
+    "Increase in LT Investment": "G78",
+    "Decrease in LT Investment": "G79",
+    "Other Investing Inflows (Outflows)": "G80",
+    "Investing Cash Flow": "G81",
+    "Net Cash from Investments & Acquisitions": "G82",
+    "Lease Payments": "G83",
+    "Debt Borrowing": "G84",
+    "Debt Repayment": "G85",
+    "Dividends": "G86",
+    "Increase (Repurchase) of Shares": "G87",
+    "Other Financing Inflows (Outflows)": "G88",
+    "Financing Cash Flow": "G89",
+    "Effect of Foreign Exchange": "G90",
+    # Additional Fields (BS)
+    "Market Capitalization": "G91",
+    "Total Debt": "G92",
+    "Preferred Stock": "G93",
+    "Non-Controlling Interest": "G94",
+    "Enterprise Value": "G95",
+    "Total Borrowings": "G96",
+    "Total Leases": "G97",
+    "Net Debt": "G98",
+    "Effective Tax Rate": "G99",
+    # Other Derived Metrics
+    "Changes in Net Working Capital": "G100",
+    "DSO": "G101",
+    "DIH": "G102",
+    "DPO": "G103"
+}
+
+def filter_field_map(statement, cf_section=None):
+    """Filter field_map to include only fields for the selected statement and CF section."""
     allowed_statements = ["IS", "BS", "CF"]
     if statement not in allowed_statements:
         raise ValueError(f"Invalid statement '{statement}'. Choose IS, BS, or CF.")
     
-    filtered_map = {k: v for k, v in field_map.items() if v["statement"] == statement}
+    if statement == "CF" and cf_section not in [None, "Operating", "Investing", "Financing"]:
+        raise ValueError(f"Invalid CF section '{cf_section}'. Choose Operating, Investing, Financing, or None for full CF.")
+    
+    if statement == "CF":
+        if cf_section:
+            filtered_map = {k: v for k, v in field_map.items() if v["statement"] == "CF" and (v["section"] == cf_section or v["section"] == "All")}
+        else:
+            filtered_map = {k: v for k, v in field_map.items() if v["statement"] == "CF"}
+    else:
+        filtered_map = {k: v for k, v in field_map.items() if v["statement"] == statement}
     
     # Add dependent fields for derived metrics
     derived_fields = {
         "Changes in Net Working Capital": ["TOT_CUR_ASSETS", "TOT_CUR_LIAB"],
         "DSO": ["ACCT_RCV", "SALES_REV_TURN"],
-        "DIH": ["INVENTORIES", "COGS"],
-        "DPO": ["ACCT_PAYABLE", "COGS"],
+        "DIH": ["INVENTORIES", "IS_COGS"],
+        "DPO": ["ACCT_PAYABLE", "IS_COGS"],
         "Net Cash from Investments & Acquisitions": ["CF_ACQUISITIONS", "CF_DISPOSALS", "CF_OTHER_INVEST_ACT"],
         "Increase (Decrease) in Other": ["TOT_CUR_ASSETS", "TOT_CUR_LIAB", "CF_CHG_ACCT_RCV", "CF_CHG_INVENTORIES", "CF_CHG_ACCT_PAYABLE"]
     }
@@ -255,7 +373,7 @@ def filter_field_map(statement):
     
     bdh_fields = [config["field"] for config in filtered_map.values() if config["source"] == "BDH"]
     if len(bdh_fields) > 25:
-        print(f"[WARNING] {statement} has {len(bdh_fields)} fields, exceeding Bloomberg's 25-field limit. Trimming to first 25 fields.")
+        print(f"[WARNING] {statement} ({cf_section or 'Full'}) has {len(bdh_fields)} fields, exceeding Bloomberg's 25-field limit. Trimming to first 25 fields.")
         trimmed_map = {}
         bdh_count = 0
         for field, config in filtered_map.items():
@@ -267,8 +385,22 @@ def filter_field_map(statement):
     
     return filtered_map
 
-def populate_valuation_model(template_path, ticker, statement):
-    """Populate the Inputs sheet with Bloomberg data for the given ticker and statement."""
+def get_column_letter(col_index):
+    """Convert 1-based column index to letter (e.g., 7 → G)."""
+    return openpyxl.utils.get_column_letter(col_index)
+
+def get_next_columns(start_cell, num_columns):
+    """Get list of column letters starting from start_cell for num_columns to the right."""
+    try:
+        col_letter = "".join(c for c in start_cell if c.isalpha())
+        row = int("".join(c for c in start_cell if c.isdigit()))
+        start_col_index = openpyxl.utils.column_index_from_string(col_letter)
+        return [get_column_letter(start_col_index + i) + str(row) for i in range(num_columns)]
+    except ValueError:
+        raise ValueError(f"Invalid cell reference: {start_cell}")
+
+def populate_valuation_model(template_path, ticker, statement, cf_section=None):
+    """Populate the Inputs sheet with Bloomberg data for the given ticker, statement, and CF section."""
     if not os.path.exists(template_path):
         raise FileNotFoundError(f"Template file {template_path} not found.")
     
@@ -277,15 +409,24 @@ def populate_valuation_model(template_path, ticker, statement):
         return
     
     try:
-        # Filter field_map for the selected statement
-        selected_field_map = filter_field_map(statement)
+        # Filter field_map for the selected statement and CF section
+        selected_field_map = filter_field_map(statement, cf_section)
         bdh_fields = [v["field"] for k, v in selected_field_map.items() if v["source"] == "BDH"]
-        print(f"[INFO] Fetching {len(bdh_fields)} fields for {statement}: {bdh_fields}")
+        # Create a mapping of Bloomberg fields to human-readable names for error reporting
+        field_to_name_map = {v["field"]: k for k, v in selected_field_map.items() if v["source"] == "BDH"}
         
-        bdh_data = fetch_bloomberg_data(session, ticker, bdh_fields)
+        if statement == "CF" and "Net Income" in selected_field_map and "NET_INCOME" in bdh_fields:
+            # Remove NET_INCOME from Bloomberg fetch if IS data is available
+            bdh_fields.remove("NET_INCOME")
+            selected_field_map.pop("Net Income")
+            print("[INFO] Using Net Income from IS (G24) for CF.")
+        
+        print(f"[INFO] Fetching {len(bdh_fields)} fields for {statement}{f' ({cf_section})' if cf_section else ''}: {bdh_fields}")
+        
+        bdh_data = fetch_bloomberg_data(session, ticker, bdh_fields, field_to_name_map)
         derived_data = calculate_derived_metrics(bdh_data)
         
-        output_path = f"{ticker}_{statement}_valuation_model.xlsx"
+        output_path = f"{ticker}_{statement}{f'_{cf_section}' if cf_section else ''}_valuation_model.xlsx"
         shutil.copy(template_path, output_path)
         
         wb = openpyxl.load_workbook(output_path)
@@ -293,40 +434,67 @@ def populate_valuation_model(template_path, ticker, statement):
             raise ValueError("Inputs sheet not found in the template file.")
         ws = wb["Inputs"]
         
-        row_map = {}
-        for row in range(1, ws.max_row + 1):
-            cell_value = ws[f"A{row}"].value
-            if cell_value and cell_value in selected_field_map:
-                row_map[cell_value] = row
+        # Map years to columns (2014–2024, 11 years)
+        years = list(range(2014, 2025))
         
-        year_columns = {2014: "B", 2015: "C", 2016: "D", 2017: "E", 2018: "F",
-                        2019: "G", 2020: "H", 2021: "I", 2022: "J", 2023: "K", 2024: "L"}
-        cagr_column = "M"
-        
-        for field, config in selected_field_map.items():
-            if field not in row_map:
-                print(f"[WARNING] Field '{field}' not found in Inputs sheet.")
-                continue
-            row = row_map[field]
-            
-            if config["source"] == "BDH":
-                values = bdh_data.get(config["field"], {})
-                for year, col in year_columns.items():
-                    if year in values:
-                        ws[f"{col}{row}"] = values[year] / 1000  # Convert to millions
-                start_value = values.get(2014, 0)
-                end_value = values.get(2024, 0)
-            elif config["source"] == "derived":
-                values = derived_data[config["field"]]
-                for year, col in year_columns.items():
-                    if year in values:
-                        ws[f"{col}{row}"] = values[year]
-                start_value = values.get(2014, 0)
-                end_value = values.get(2024, 0)
-            
+        # Handle Net Income for CF (copy from IS G24 to G66)
+        if statement == "CF" and "Net Income" in field_cell_map:
+            start_cell = field_cell_map["Net Income"]
+            cells = get_next_columns(start_cell, len(years))
+            is_cells = get_next_columns("G24", len(years))
+            print(f"[DEBUG] Copying Net Income from IS {is_cells} to CF {cells}")
+            for is_cell, cf_cell in zip(is_cells, cells):
+                if ws[is_cell].value is not None:
+                    ws[cf_cell] = ws[is_cell].value
+                    ws[cf_cell].number_format = "#,##0.000"
+                else:
+                    print(f"[WARNING] No data in {is_cell} for Net Income.")
+            # Calculate CAGR for Net Income
+            start_value = ws[is_cells[0]].value or 0
+            end_value = ws[is_cells[-1]].value or 0
             if start_value and end_value:
-                cagr = calculate_cagr(start_value, end_value, 10)
-                ws[f"{cagr_column}{row}"] = cagr / 100
+                cagr_cell = get_column_letter(openpyxl.utils.column_index_from_string(cells[-1][:-len(str(int(cells[-1][1:])))] + 1)) + cells[0][len(cells[0][:-len(str(int(cells[0][1:])))]):]
+                ws[cagr_cell] = calculate_cagr(start_value, end_value, 10) / 100
+                ws[cagr_cell].number_format = "0.00%"
+                print(f"[DEBUG] CAGR for 'Net Income' written to {cagr_cell}")
+        
+        # Process remaining fields
+        for field, config in selected_field_map.items():
+            if field not in field_cell_map:
+                print(f"[WARNING] No cell defined for '{field}' in field_cell_map. Skipping.")
+                continue
+            
+            start_cell = field_cell_map[field]
+            try:
+                cells = get_next_columns(start_cell, len(years))
+                print(f"[DEBUG] Writing '{field}' to cells: {cells}")
+                
+                if config["source"] == "BDH":
+                    values = bdh_data.get(config["field"], {})
+                    for year, cell in zip(years, cells):
+                        if year in values:
+                            ws[cell] = values[year] / 1000  # Convert to millions (Bloomberg in thousands)
+                            ws[cell].number_format = "#,##0.000"  # Comma as thousand separator, 3 decimals
+                    start_value = (values.get(2014, 0) / 1000) if 2014 in values else 0
+                    end_value = (values.get(2024, 0) / 1000) if 2024 in values else 0
+                elif config["source"] == "derived":
+                    values = derived_data[config["field"]]
+                    for year, cell in zip(years, cells):
+                        if year in values:
+                            ws[cell] = values[year]
+                            ws[cell].number_format = "#,##0.000"
+                    start_value = values.get(2014, 0) or 0
+                    end_value = values.get(2024, 0) or 0
+                
+                # Write CAGR
+                if start_value and end_value:
+                    cagr_cell = get_column_letter(openpyxl.utils.column_index_from_string(cells[-1][:-len(str(int(cells[-1][1:])))] + 1)) + cells[0][len(cells[0][:-len(str(int(cells[0][1:])))]):]
+                    ws[cagr_cell] = calculate_cagr(start_value, end_value, 10) / 100
+                    ws[cagr_cell].number_format = "0.00%"
+                    print(f"[DEBUG] CAGR for '{field}' written to {cagr_cell}")
+            
+            except Exception as e:
+                print(f"[WARNING] Error writing '{field}' to {start_cell} and subsequent cells: {e}")
         
         wb.save(output_path)
         print(f"[INFO] Valuation model saved as {output_path}")
@@ -343,8 +511,9 @@ def populate_valuation_model(template_path, ticker, statement):
 
 if __name__ == "__main__":
     print("[INFO] This script processes one financial statement (IS, BS, or CF) at a time due to Bloomberg's 25-field limit.")
-    print("[INFO] Run the script separately for each statement. Close the script after each run.")
-    print("[INFO] Output files will be named <ticker>_<statement>_valuation_model.xlsx (e.g., AAPL_IS_valuation_model.xlsx).")
+    print("[INFO] For CF, you can select Operating, Investing, or Financing activities, or the full CF statement.")
+    print("[INFO] Run the script separately for each statement/section. Close the script after each run.")
+    print("[INFO] Output files will be named <ticker>_<statement>[_<section>]_valuation_model.xlsx (e.g., AAPL_CF_Operating_valuation_model.xlsx).")
     
     template_path = "LIS_Valuation_Empty.xlsx"
     
@@ -355,7 +524,12 @@ if __name__ == "__main__":
         print("[ERROR] Ticker symbol must contain only letters and numbers.")
     else:
         statement = input("Enter financial statement (IS, BS, CF): ").strip().upper()
+        cf_section = None
+        if statement == "CF":
+            cf_section = input("Enter CF section (Operating, Investing, Financing, or press Enter for full CF): ").strip().capitalize()
+            if cf_section == "":
+                cf_section = None
         try:
-            populate_valuation_model(template_path, ticker, statement)
+            populate_valuation_model(template_path, ticker, statement, cf_section)
         except Exception as e:
             print(f"[ERROR] An error occurred: {e}")
