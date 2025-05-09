@@ -111,12 +111,12 @@ def calculate_derived_metrics(data, start_year=2014, end_year=2024):
             nwc_t1 = data["TOT_CUR_ASSETS"][year - 1] - data["TOT_CUR_LIAB"][year - 1]
             derived["Changes in Net Working Capital"][year] = nwc_t - nwc_t1
         
-        if year in data.get("ACCT_RCV", {}) and year in data.get("SALES_REV_TURN", {}) and \
-           year in data.get("INVENTORIES", {}) and year in data.get("IS_COGS", {}) and \
+        if year in data.get("BS_ACCOUNTS_RECEIVABLE", {}) and year in data.get("SALES_REV_TURN", {}) and \
+           year in data.get("INVENTORIES", {}) and year in data.get("IS_COST_OF_GOODS_SOLD", {}) and \
            year in data.get("ACCT_PAYABLE", {}):
             revenue = data["SALES_REV_TURN"][year]
-            cogs = data["IS_COGS"][year]
-            ar = data["ACCT_RCV"][year]
+            cogs = data["IS_COST_OF_GOODS_SOLD"][year]
+            ar = data["BS_ACCOUNTS_RECEIVABLE"][year]
             inv = data["INVENTORIES"][year]
             ap = data["ACCT_PAYABLE"][year]
             derived["DSO"][year] = (ar / revenue * 365) if revenue else 0
@@ -149,37 +149,37 @@ def calculate_cagr(start_value, end_value, years):
         return 0
     return ((end_value / start_value) ** (1 / years) - 1) * 100
 
-# Segmented field map
+# Updated field map with corrected Bloomberg fields
 field_map = {
     # Income Statement (IS)
     "Revenue (Sales)": {"source": "BDH", "field": "SALES_REV_TURN", "statement": "IS"},
-    "COGS (Cost of Goods Sold)": {"source": "BDH", "field": "IS_COGS", "statement": "IS"},
+    "COGS (Cost of Goods Sold)": {"source": "BDH", "field": "IS_COG_AND_SERVICES_SOLD", "statement": "IS"},
     "Gross Profit": {"source": "BDH", "field": "GROSS_PROFIT", "statement": "IS"},
-    "SG&A (Selling, General & Administrative)": {"source": "BDH", "field": "SELL_GEN_ADMIN_EXP", "statement": "IS"},
-    "R&D (Research & Development)": {"source": "BDH", "field": "RD_EXP", "statement": "IS"},
-    "Other Operating (Income) Expenses": {"source": "BDH", "field": "IS_OTHER_OPER_EXP", "statement": "IS"},
+    "SG&A (Selling, General & Administrative)": {"source": "BDH", "field": "IS_SGA_EXPENSE", "statement": "IS"},
+    "R&D (Research & Development)": {"source": "BDH", "field": "IS_OPERATING_EXPENSES_RD", "statement": "IS"},
+    "Other Operating (Income) Expenses": {"source": "BDH", "field": "IS_OTHER_OPER_INC", "statement": "IS"},
     "EBITDA": {"source": "BDH", "field": "EBITDA", "statement": "IS"},
-    "D&A (Depreciation & Amortization)": {"source": "BDH", "field": "DEPR_AMORT_EXP", "statement": "IS"},
-    "Depreciation Expense": {"source": "BDH", "field": "DEPRECIATION_EXP", "statement": "IS"},
-    "Amortization Expense": {"source": "BDH", "field": "AMORT_INTAN_EXP", "statement": "IS"},
-    "Operating Income (EBIT)": {"source": "BDH", "field": "OPER_INC", "statement": "IS"},
-    "Net Interest Expense (Income)": {"source": "BDH", "field": "NET_INT_EXP", "statement": "IS"},
-    "Interest Expense": {"source": "BDH", "field": "INT_EXP", "statement": "IS"},
-    "Interest Income": {"source": "BDH", "field": "NON_OPER_INT_INC", "statement": "IS"},
-    "FX (Gain) Loss": {"source": "BDH", "field": "IS_FX_GAIN_LOSS", "statement": "IS"},
-    "Other Non-Operating (Income) Expenses": {"source": "BDH", "field": "IS_NON_OPER_INC_EXP", "statement": "IS"},
-    "Pre-Tax Income (EBT)": {"source": "BDH", "field": "INC_BEF_XO_ITEMS", "statement": "IS"},
-    "Tax Expense (Benefits)": {"source": "BDH", "field": "TOT_PROV_INC_TAX", "statement": "IS"},
+    "D&A (Depreciation & Amortization)": {"source": "BDH", "field": "ARDR_DEPRECIATION_AMORTIZATION", "statement": "IS"},
+    "Depreciation Expense": {"source": "BDH", "field": "ARDR_DEPRECIATION_EXP", "statement": "IS"},
+    "Amortization Expense": {"source": "BDH", "field": "ARDR_AMORT_EXP", "statement": "IS"},
+    "Operating Income (EBIT)": {"source": "BDH", "field": "IS_OPERATING_INCOME", "statement": "IS"},
+    "Net Interest Expense (Income)": {"source": "BDH", "field": "IS_NET_INTEREST_EXPENSE", "statement": "IS"},
+    "Interest Expense": {"source": "BDH", "field": "IS_INT_EXPENSE", "statement": "IS"},
+    "Interest Income": {"source": "BDH", "field": "IS_INT_INC", "statement": "IS"},
+    "FX (Gain) Loss": {"source": "BDH", "field": "IS_FOREIGN_EXCH_LOSS", "statement": "IS"},
+    "Other Non-Operating (Income) Expenses": {"source": "BDH", "field": "IS_OTHER_NON_OPERATING_INC_LOSS", "statement": "IS"},
+    "Pre-Tax Income (EBT)": {"source": "BDH", "field": "PRETAX_INC", "statement": "IS"},
+    "Tax Expense (Benefits)": {"source": "BDH", "field": "IS_INC_TAX_EXP", "statement": "IS"},
     "Net Income": {"source": "BDH", "field": "NET_INCOME", "statement": "IS"},
     "EPS Basic": {"source": "BDH", "field": "BASIC_EPS", "statement": "IS"},
     "EPS Diluted": {"source": "BDH", "field": "DILUTED_EPS", "statement": "IS"},
-    "Basic Weighted Average Shares": {"source": "BDH", "field": "BASIC_AVG_SHS", "statement": "IS"},
-    "Diluted Weighted Average Shares": {"source": "BDH", "field": "DILUTED_AVG_SHS", "statement": "IS"},
+    "Basic Weighted Average Shares": {"source": "BDH", "field": "IS_BASIC_AVG_SHARES", "statement": "IS"},
+    "Diluted Weighted Average Shares": {"source": "BDH", "field": "IS_DILUTED_AVG_SHARES", "statement": "IS"},
     # Balance Sheet (BS)
     "Cash & Cash Equivalents & ST Investments": {"source": "BDH", "field": "CASH_AND_ST_INVEST", "statement": "BS"},
     "Cash & Cash Equivalents": {"source": "BDH", "field": "CASH_AND_EQUIV", "statement": "BS"},
     "Short-Term Investments": {"source": "BDH", "field": "ST_INVEST", "statement": "BS"},
-    "Accounts Receivable": {"source": "BDH", "field": "ACCT_RCV", "statement": "BS"},
+    "Accounts Receivable": {"source": "BDH", "field": "BS_ACCOUNTS_RECEIVABLE", "statement": "BS"},
     "Inventory": {"source": "BDH", "field": "INVENTORIES", "statement": "BS"},
     "Prepaid Expenses and Other Current Assets": {"source": "BDH", "field": "OTH_CUR_ASSETS", "statement": "BS"},
     "Current Assets": {"source": "BDH", "field": "TOT_CUR_ASSETS", "statement": "BS"},
@@ -357,9 +357,9 @@ def filter_field_map(statement, cf_section=None):
     # Add dependent fields for derived metrics
     derived_fields = {
         "Changes in Net Working Capital": ["TOT_CUR_ASSETS", "TOT_CUR_LIAB"],
-        "DSO": ["ACCT_RCV", "SALES_REV_TURN"],
-        "DIH": ["INVENTORIES", "IS_COGS"],
-        "DPO": ["ACCT_PAYABLE", "IS_COGS"],
+        "DSO": ["BS_ACCOUNTS_RECEIVABLE", "SALES_REV_TURN"],
+        "DIH": ["INVENTORIES", "IS_COST_OF_GOODS_SOLD"],
+        "DPO": ["ACCT_PAYABLE", "IS_COST_OF_GOODS_SOLD"],
         "Net Cash from Investments & Acquisitions": ["CF_ACQUISITIONS", "CF_DISPOSALS", "CF_OTHER_INVEST_ACT"],
         "Increase (Decrease) in Other": ["TOT_CUR_ASSETS", "TOT_CUR_LIAB", "CF_CHG_ACCT_RCV", "CF_CHG_INVENTORIES", "CF_CHG_ACCT_PAYABLE"]
     }
