@@ -34,7 +34,7 @@ def fetch_bloomberg_data(session, ticker, fields, field_to_name_map, start_year=
     
     ref_data_service = session.getService("//blp/refdata")
     request = ref_data_service.createRequest("HistoricalDataRequest")
-    security = f"{ticker} US Equity"
+    security = f"{ticker}"
     request.getElement("securities").appendValue(security)
     for field in fields:
         request.getElement("fields").appendValue(field)
@@ -277,11 +277,13 @@ field_map = {
     "DIH": {"source": "derived", "field": "DIH", "statement": "BS"},
     "DPO": {"source": "derived", "field": "DPO", "statement": "BS"},
     "Net Cash from Investments & Acquisitions": {"source": "derived", "field": "Net Cash from Investments & Acquisitions", "statement": "CF", "section": "Investing"},
-    "Increase (Decrease) in Other": {"source": "derived", "field": "Increase (Decrease) in Other", "statement": "CF", "section": "Operating"}
+    "Increase (Decrease) in Other": {"source": "derived", "field": "Increase (Decrease) in Other", "statement": "CF", "section": "Operating"},
+
 }
 
 # Manual cell mapping for 2014 data
 field_cell_map = {
+
     # Income Statement (IS)
     "Revenue (Sales)": "G6",
     "COGS (Cost of Goods Sold)": "G7",
@@ -553,7 +555,7 @@ def populate_valuation_model(template_path, output_path, ticker_symbol):
                 raw_value = data_source_for_item.get(year)
                 
                 if isinstance(raw_value, (int, float)):
-                    scaled_value = raw_value / 1000.0  # Convert to millions
+                    scaled_value = raw_value # Convert to millions
                     ws[cell_ref] = scaled_value
                     ws[cell_ref].number_format = "#,##0.000"
                     yearly_values_for_cagr.append(scaled_value)
@@ -622,7 +624,7 @@ if __name__ == "__main__":
     
     ticker_input = ""
     while not ticker_input:
-        ticker_input = input("Enter the Ticker Symbol (e.g., AAPL for Apple Inc.): ").strip().upper()
+        ticker_input = input("Enter the Ticker Symbol (e.g., AAPL US Equity for Apple Inc.): ").strip().upper()
         if not ticker_input:
             print("[VALIDATION] Ticker symbol cannot be empty. Please try again.")
         elif not ticker_input.isalnum():
