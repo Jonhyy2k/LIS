@@ -1,3 +1,7 @@
+# You need to login to the Bloomberg Terminal for the script to work!
+# Run it using the arrow on the top right.
+# Enter the stock ticker while specifying the country and "Equity" in the end, for example AAPL US Equity or  000660 KS Equtiy
+
 import blpapi
 import openpyxl
 import shutil
@@ -627,11 +631,7 @@ if __name__ == "__main__":
         ticker_input = input("Enter the Ticker Symbol (e.g., AAPL US Equity for Apple Inc.): ").strip().upper()
         if not ticker_input:
             print("[VALIDATION] Ticker symbol cannot be empty. Please try again.")
-        elif not ticker_input.isalnum():
-            confirm = input(f"Ticker '{ticker_input}' contains non-alphanumeric characters. Proceed? (y/n): ").strip().lower()
-            if confirm != 'y':
-                ticker_input = ""
-    
+
     output_file_name = f"{ticker_input}_Valuation_Model_{datetime.now().strftime('%Y%m%d')}.xlsx"
     final_output_path = os.path.join(output_directory, output_file_name)
     
