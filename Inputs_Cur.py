@@ -175,19 +175,6 @@ def calculate_derived_metrics(data, start_year=2014, end_year=2024):
 
     return derived
 
-def calculate_cagr(start_value, end_value, years):
-    """Calculate Compound Annual Growth Rate."""
-    if not isinstance(start_value, (int, float)) or not isinstance(end_value, (int, float)):
-        return 0
-    if start_value == 0 or years <= 0:
-        return 0
-    if (end_value >= 0 and start_value < 0) or (end_value < 0 and start_value > 0):
-        return "N/M"
-    if start_value < 0 and end_value < 0:
-        start_value, end_value = abs(start_value), abs(end_value)
-        return ((end_value / start_value) ** (1 / years) - 1) * 100 * -1
-    return ((end_value / start_value) ** (1 / years) - 1) * 100
-
 field_map = {
     # Income Statement (IS)
     "Revenue (Sales)": {"source": "BDH", "field": "SALES_REV_TURN", "statement": "IS"},
@@ -462,127 +449,116 @@ def populate_valuation_model(template_path, output_path, ticker_symbol):
 
     shutil.copy(template_path, output_path)
     print(f"[INFO] Copied template '{template_path}' to output file '{output_path}'.")
-    
+
     wb = openpyxl.load_workbook(output_path)
     if "Inputs" not in wb.sheetnames:
         print("[ERROR] 'Inputs' sheet not found in the workbook.")
         raise ValueError("'Inputs' sheet not found in the template file.")
     ws = wb["Inputs"]
-    
+
     tasks_to_process = ["IS", "BS", "CF"]
-    data_years = list(range(2014, 2024 + 1))
-    cagr_period_years = len(data_years) - 1 if len(data_years) > 1 else 0
-    
+    data_years = list(range(2014, 2025))
+
     all_fetched_bdh_data = {}
     global_bberg_code_to_name_map = {
-        config["field"]: name 
-        for name, config in field_map.items() 
+        config["field"]: name
+        for name, config in field_map.items()
         if config["source"] == "BDH" and "field" in config
     }
-    
+
     print(f"\n[PHASE] Starting data fetching for ticker: {ticker_symbol}")
     for task_name in tasks_to_process:
         print(f"\n  [TASK] Processing data collection for: {task_name}")
-        
+
         current_task_field_configs = filter_field_map_for_task(task_name)
-        bdh_fields_for_this_task = []
-        for name, config in current_task_field_configs.items():
-            if config["source"] == "BDH" and "field" in config:
-                bdh_fields_for_this_task.append(config["field"])
-        
+        bdh_fields_for_this_task = [
+            config["field"]
+            for name, config in current_task_field_configs.items()
+            if config["source"] == "BDH" and "field" in config
+        ]
+
         if not bdh_fields_for_this_task:
             print(f"    [INFO] No Bloomberg (BDH) fields to fetch for task '{task_name}'. Skipping.")
             continue
-            
-        print(f"    [INFO] Identified {len(set(bdh_fields_for_this_task))} unique BDH fields for '{task_name}'.")
-        
+
         field_batches = batch_fields(bdh_fields_for_this_task, batch_size=25)
-        print(f"    [INFO] Split into {len(field_batches)} batches for '{task_name}'.")
-        
+
         for batch_idx, current_batch_fields in enumerate(field_batches):
-            print(f"      [BATCH] Processing batch {batch_idx + 1}/{len(field_batches)} for '{task_name}' with {len(current_batch_fields)} fields.")
-            
             session = None
             try:
                 session = setup_bloomberg_session(ticker_symbol)
                 if not session:
-                    print(f"        [ERROR] Failed to start Bloomberg session for batch {batch_idx + 1}. Skipping this batch.")
                     continue
-                
-                batch_data_fetched = fetch_bloomberg_data(session, ticker_symbol, current_batch_fields, global_bberg_code_to_name_map, start_year=data_years[0], end_year=data_years[-1])
-                
-                if batch_data_fetched is None:
-                    print(f"        [ERROR] Critical error fetching data for batch {batch_idx + 1}. Data might be incomplete.")
-                elif batch_data_fetched:
+
+                # Apply USD override
+                ref_data_service = session.getService("//blp/refdata")
+                request = ref_data_service.createRequest("HistoricalDataRequest")
+                request.getElement("securities").appendValue(ticker_symbol)
+                for field in current_batch_fields:
+                    request.getElement("fields").appendValue(field)
+                request.set("periodicitySelection", "YEARLY")
+                request.set("startDate", "20140101")
+                request.set("endDate", "20241231")
+
+                overrides = request.getElement("overrides")
+                override = overrides.appendElement()
+                override.setElement("fieldId", "EQY_FUND_CRNCY")
+                override.setElement("value", "USD")
+
+                print(f"[DEBUG] Sending USD override request for batch {batch_idx + 1}")
+                session.sendRequest(request)
+
+                batch_data_fetched = fetch_bloomberg_data(
+                    session, ticker_symbol, current_batch_fields,
+                    global_bberg_code_to_name_map, start_year=2014, end_year=2024
+                )
+
+                if batch_data_fetched:
                     for field_code, yearly_data in batch_data_fetched.items():
                         if field_code not in all_fetched_bdh_data:
                             all_fetched_bdh_data[field_code] = {}
                         for year, value in yearly_data.items():
-                            if value is not None:
-                                all_fetched_bdh_data[field_code][year] = value
-                            elif year not in all_fetched_bdh_data[field_code]:
-                                all_fetched_bdh_data[field_code][year] = value
-                    print(f"        [SUCCESS] Fetched data for batch {batch_idx + 1}. {len(batch_data_fetched)} fields processed.")
-                    print(f"        [DEBUG] Data fetched so far: {all_fetched_bdh_data}")
-                else:
-                    print(f"        [INFO] No data returned for batch {batch_idx + 1}, or batch was empty.")
-                    
-            except Exception as e:
-                print(f"        [ERROR] An unexpected error occurred while processing batch {batch_idx + 1} for '{task_name}': {e}")
+                            all_fetched_bdh_data[field_code][year] = value
+
             finally:
                 if session:
-                    try:
-                        session.stop()
-                        print(f"      [BATCH] Bloomberg session stopped for batch {batch_idx + 1}.")
-                    except Exception as e_stop:
-                        print(f"        [WARNING] Error stopping Bloomberg session: {e_stop}")
-    
+                    session.stop()
+
     print(f"\n[PHASE] Completed all data fetching.")
-    
+
     print(f"\n[PHASE] Calculating derived metrics...")
-    all_derived_data = calculate_derived_metrics(all_fetched_bdh_data, start_year=data_years[0], end_year=data_years[-1])
+    all_derived_data = calculate_derived_metrics(all_fetched_bdh_data, start_year=2014, end_year=2024)
     print("[INFO] Derived metrics calculated.")
-    print(f"[DEBUG] Derived data: {all_derived_data}")
-    
+
     print(f"\n[PHASE] Writing all data to Excel sheet '{ws.title}'...")
-    
+
     for item_name, config in field_map.items():
         if item_name.startswith("__dep_"):
             continue
-            
+
         base_cell_ref = field_cell_map.get(item_name)
         if not base_cell_ref:
             continue
-            
+
         target_cells_for_item = get_target_cells_for_years(base_cell_ref, len(data_years))
-        yearly_values_for_cagr = []
-        
+
         if config["source"] == "BDH":
             bberg_field_code = config["field"]
             data_source_for_item = all_fetched_bdh_data.get(bberg_field_code, {})
-            print(f"[DEBUG] Writing {item_name} ({bberg_field_code}): {data_source_for_item}")
             for i, year in enumerate(data_years):
                 cell_ref = target_cells_for_item[i]
                 raw_value = data_source_for_item.get(year)
-                
+
                 if isinstance(raw_value, (int, float)):
-                    scaled_value = raw_value # Convert to millions
-                    ws[cell_ref] = scaled_value
+                    ws[cell_ref] = raw_value
                     ws[cell_ref].number_format = "#,##0.000"
-                    yearly_values_for_cagr.append(scaled_value)
-                    print(f"[DEBUG] Wrote {scaled_value} to {cell_ref}")
                 elif isinstance(raw_value, str) and "N/A" in raw_value:
                     ws[cell_ref] = raw_value
-                    yearly_values_for_cagr.append(0)
-                    print(f"[DEBUG] Wrote {raw_value} to {cell_ref}")
                 else:
                     ws[cell_ref] = 0
-                    yearly_values_for_cagr.append(0)
-                    print(f"[DEBUG] Wrote 0 (no data) to {cell_ref}")
-                    
+
         elif config["source"] == "derived":
             data_source_for_item = all_derived_data.get(config["field"], {})
-            print(f"[DEBUG] Writing {item_name} (derived): {data_source_for_item}")
             for i, year in enumerate(data_years):
                 cell_ref = target_cells_for_item[i]
                 value = data_source_for_item.get(year)
@@ -592,31 +568,9 @@ def populate_valuation_model(template_path, output_path, ticker_symbol):
                         ws[cell_ref].number_format = "0.0"
                     else:
                         ws[cell_ref].number_format = "#,##0.000"
-                    yearly_values_for_cagr.append(value)
-                    print(f"[DEBUG] Wrote {value} to {cell_ref}")
                 else:
                     ws[cell_ref] = 0
-                    yearly_values_for_cagr.append(0)
-                    print(f"[DEBUG] Wrote 0 (no data) to {cell_ref}")
-        
-        if yearly_values_for_cagr and cagr_period_years > 0:
-            start_value_cagr = yearly_values_for_cagr[0]
-            end_value_cagr = yearly_values_for_cagr[cagr_period_years]
-            last_year_cell_ref = target_cells_for_item[-1]
-            last_year_col_str = "".join(filter(str.isalpha, last_year_cell_ref))
-            row_num_str = "".join(filter(str.isdigit, last_year_cell_ref))
-            cagr_col_idx = openpyxl.utils.column_index_from_string(last_year_col_str) + 1
-            cagr_col_letter = get_column_letter_from_index(cagr_col_idx)
-            cagr_cell_ref = f"{cagr_col_letter}{row_num_str}"
-            
-            cagr_value = calculate_cagr(start_value_cagr, end_value_cagr, cagr_period_years)
-            if isinstance(cagr_value, str):
-                ws[cagr_cell_ref] = cagr_value
-            else:
-                ws[cagr_cell_ref] = cagr_value / 100.0
-                ws[cagr_cell_ref].number_format = "0.00%"
-            print(f"[DEBUG] Wrote CAGR {cagr_value} to {cagr_cell_ref}")
-    
+
     wb.save(output_path)
     print(f"\n[SUCCESS] Valuation model populated and saved to '{output_path}'")
 
