@@ -1,6 +1,7 @@
 # You need to login to the Bloomberg Terminal for the script to work!
 # Run it using the arrow on the top right.
-# Enter the stock ticker while specifying the country and "Equity" in the end, for example AAPL US Equity or  000660 KS Equtiy [TICKER] [COUNTRY] 
+# Enter the stock ticker while specifying the country, for example Apple Inc. type AAPL US or 000660 KS; [TICKER] [COUNTRY] 
+# All data is given in USD
 
 import blpapi
 import openpyxl
