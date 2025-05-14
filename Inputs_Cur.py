@@ -1,6 +1,6 @@
 # You need to login to the Bloomberg Terminal for the script to work!
 # Run it using the arrow on the top right.
-# Enter the stock ticker while specifying the country and "Equity" in the end, for example AAPL US Equity or  000660 KS Equtiy
+# Enter the stock ticker while specifying the country and "Equity" in the end, for example AAPL US Equity or  000660 KS Equtiy [TICKER] [COUNTRY] 
 
 import blpapi
 import openpyxl
@@ -45,7 +45,7 @@ def fetch_bloomberg_data(session, ticker, fields, field_to_name_map, start_year=
     
     ref_data_service = session.getService("//blp/refdata")
     request = ref_data_service.createRequest("HistoricalDataRequest")
-    security = f"{ticker}"
+    security = f"{ticker} Equity" 
     request.getElement("securities").appendValue(security)
     for field in fields:
         request.getElement("fields").appendValue(field)
