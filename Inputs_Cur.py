@@ -190,8 +190,40 @@ def fetch_bloomberg_data(session, ticker, fields, field_to_name_map, start_year=
 
     return data
 
+#
+def calculate_derived_metrics(fetched_data, start_year, end_year):
+    derived_data = {}
+    
+    # Sum "Other" components for Income Statement
+    other_operating_components = [
+        "IS_OTHER_OPER_INC",  
+        "IS_OTHER_OPERATING_EXPENSES"       
+    ]
+
+    derived_data["Total_Other_Operating"] = {}
+    
+    for year in range(start_year, end_year + 1):
+        total_other = 0
+        has_value = False
+        
+        for field in other_operating_components:
+            if field in fetched_data and year in fetched_data[field]:
+                value = fetched_data[field].get(year)
+                if isinstance(value, (int, float)):
+                    total_other += value
+                    has_value = True
+        
+        
+        if has_value:
+            derived_data["Total_Other_Operating"][year] = total_other
+        else:
+            derived_data["Total_Other_Operating"][year] = "N/A (Missing Components)"
+
+    return derived_data
+#
 
 # Need to incorporate other income + other expense for final value..
+# Is in, maybe?
 field_map = {
     # Income Statement (IS)
     "Revenue (Sales)": {"source": "BDH", "field": "SALES_REV_TURN", "statement": "IS"},
@@ -217,29 +249,22 @@ field_map = {
     "EPS Diluted": {"source": "BDH", "field": "DILUTED_EPS", "statement": "IS"},
     "Basic Weighted Average Shares": {"source": "BDH", "field": "IS_AVG_NUM_SH_FOR_EPS", "statement": "IS"},
     "Diluted Weighted Average Shares": {"source": "BDH", "field": "IS_SH_FOR_DILUTED_EPS", "statement": "IS"},
+    "Total Other Operating Components": {"source": "derived", "field": "Total_Other_Operating", "statement": "IS"},
 
     # Balance Sheet (BS)
-    #"Cash & Cash Equivalents & ST Investments": {"source": "BDH", "field": "CASH_CASH_EQTY_STI_DETAILED", "statement": "BS"},
     "Cash & Cash Equivalents": {"source": "BDH", "field": "BS_CASH_NEAR_CASH_ITEM", "statement": "BS"},
     "Short-Term Investments": {"source": "BDH", "field": "BS_MKT_SEC_OTHER_ST_INVEST", "statement": "BS"},
     "Accounts Receivable": {"source": "BDH", "field": "BS_ACCT_NOTE_RCV", "statement": "BS"},
     "Inventory": {"source": "BDH", "field": "BS_INVENTORIES", "statement": "BS"},
-    #"Prepaid Expenses and Other Current Assets": {"source": "BDH", "field": "OTH_CUR_ASSETS", "statement": "BS"},
     "Current Assets": {"source": "BDH", "field": "BS_CUR_ASSET_REPORT", "statement": "BS"},
-    #"Net PP&E (Property, Plant and Equipment)": {"source": "BDH", "field": "NET_PPE", "statement": "BS"},
     "Gross PP&E (Property, Plant and Equipment)": {"source": "BDH", "field": "BS_GROSS_FIX_ASSET", "statement": "BS"},
     "Accumulated Depreciation": {"source": "BDH", "field": "BS_ACCUM_DEPR", "statement": "BS"},
     "Intangibles": {"source": "BDH", "field": "BS_DISCLOSED_INTANGIBLES", "statement": "BS"},
     "Goodwill": {"source": "BDH", "field": "BS_GOODWILL", "statement": "BS"},
-    #"Intangibles excl. Goodwill": {"source": "BDH", "field": "NET_OTHER_INTAN_ASSETS", "statement": "BS"},
-    #"Other Non-Current Assets": {"source": "BDH", "field": "OTH_NON_CUR_ASSETS", "statement": "BS"},
     "Non-Current Assets": {"source": "BDH", "field": "BS_TOT_NON_CUR_ASSET", "statement": "BS"},
-    #"Total Assets": {"source": "BDH", "field": "TOT_ASSETS", "statement": "BS"},
     "Accounts Payable": {"source": "BDH", "field": "BS_ACCT_PAYABLE", "statement": "BS"},
-    #"Short-Term Debt": {"source": "BDH", "field": "ST_DEBT", "statement": "BS"},
     "Short-Term Borrowings": {"source": "BDH", "field": "SHORT_TERM_DEBT_DETAILED", "statement": "BS"},
     "Current Portion of Lease Liabilities": {"source": "BDH", "field": "ST_CAPITALIZED_LEASE_LIABILITIES", "statement": "BS"},
-    #"Accrued Expenses and Other Current Liabilities": {"source": "BDH", "field": "OTH_CUR_LIAB", "statement": "BS"},
     "Current Liabilities": {"source": "BDH", "field": "BS_CUR_LIAB", "statement": "BS"},
     "Long-Term Borrowings": {"source": "BDH", "field": "LONG_TERM_BORROWINGS_DETAILED", "statement": "BS"},
     "Long-Term Operating Lease Liabilities": {"source": "BDH", "field": "LT_CAPITALIZED_LEASE_LIABILITIES", "statement": "BS"},
@@ -255,23 +280,19 @@ field_map = {
     "Increase (Decrease) in Accounts Payable": {"source": "BDH", "field": "CF_CHANGE_IN_ACCOUNTS_PAYABLE", "statement": "CF", "section": "Operating"},
     "Increase (Decrease) in Accrued Revenues and Other CL": {"source": "BDH", "field": "CF_ACCT_RCV_UNBILLED_REV", "statement": "CF", "section": "Operating"},
     "Stock Based Compensation": {"source": "BDH", "field": "CF_STOCK_BASED_COMPENSATION", "statement": "CF", "section": "Operating"},
-    #"Other Operating Adjustments": {"source": "BDH", "field": "CF_OTHER_OPERATING_ACT", "statement": "CF", "section": "Operating"},
     "Operating Cash Flow": {"source": "BDH", "field": "CF_CASH_FROM_OPER", "statement": "CF", "section": "Operating"},
-    #"Net Capex": {"source": "BDH", "field": "ARD_CAPITAL_EXPENDITURES", "statement": "CF", "section": "Investing"},
     "Acquisition of Fixed & Intangibles": {"source": "BDH", "field": "ACQUIS_OF_FIXED_INTANG", "statement": "CF", "section": "Investing"},
     "Disposal of Fixed & Intangibles": {"source": "BDH", "field": "DISPOSAL_OF_FIXED_INTANG", "statement": "CF", "section": "Investing"},
     "Acquisitions": {"source": "BDH", "field": "CF_CASH_FOR_ACQUIS_SUBSIDIARIES", "statement": "CF", "section": "Investing"},
     "Divestitures": {"source": "BDH", "field": "CF_CASH_FOR_DIVESTITURES", "statement": "CF", "section": "Investing"},
     "Increase in LT Investment": {"source": "BDH", "field": "CF_INCR_INVEST", "statement": "CF", "section": "Investing"},
     "Decrease in LT Investment": {"source": "BDH", "field": "CF_DECR_INVEST", "statement": "CF", "section": "Investing"},
-    #"Other Investing Inflows (Outflows)": {"source": "BDH", "field": "OTHER_INVESTING_ACT_DETAILED", "statement": "CF", "section": "Investing"},
     "Investing Cash Flow": {"source": "BDH", "field": "CF_CASH_FROM_INV_ACT", "statement": "CF", "section": "Investing"},
     "Lease Payments": {"source": "BDH", "field": "ARDR_REPAYMENT_FINANCE_LEASES", "statement": "CF", "section": "Financing"},
     "Debt Borrowing": {"source": "BDH", "field": "CF_LT_DEBT_CAP_LEAS_PROCEEDS", "statement": "CF", "section": "Financing"},
     "Debt Repayment": {"source": "BDH", "field": "CF_LT_DEBT_CAP_LEAS_PAYMENT", "statement": "CF", "section": "Financing"},
     "Dividends": {"source": "BDH", "field": "CF_DVD_PAID", "statement": "CF", "section": "Financing"},
     "Increase (Repurchase) of Shares": {"source": "BDH", "field": "PROC_FR_REPURCH_EQTY_DETAILED", "statement": "CF", "section": "Financing"},
-    #"Other Financing Inflows (Outflows)": {"source": "BDH", "field": "OTHER_FIN_AND_DEC_CAP", "statement": "CF", "section": "Financing"},
     "Financing Cash Flow": {"source": "BDH", "field": "CFF_ACTIVITIES_DETAILED", "statement": "CF", "section": "Financing"},
     "Effect of Foreign Exchange": {"source": "BDH", "field": "CF_EFFECT_FOREIGN_EXCHANGES", "statement": "CF", "section": "All"},
     "Net Changes in Cash": {"source": "BDH", "field": "CF_NET_CHNG_CASH", "statement": "CF", "section": "All"},
@@ -281,20 +302,8 @@ field_map = {
     "Market Capitalization": {"source": "BDH", "field": "CUR_MKT_CAP", "statement": "BS"},
     "Total Debt": {"source": "BDH", "field": "SHORT_AND_LONG_TERM_DEBT", "statement": "BS"},
     "Preferred Stock": {"source": "BDH", "field": "PFD_EQTY_HYBRID_CAPITAL", "statement": "BS"},
-    #"Non-Controlling Interest": {"source": "BDH", "field": "MINORITY_NONCONTROLLING_INTEREST", "statement": "BS"},
     "Enterprise Value": {"source": "BDH", "field": "ENTERPRISE_VALUE", "statement": "BS"},
-    #"Total Borrowings": {"source": "BDH", "field": "TOT_BORROWINGS", "statement": "BS"},
-    #"Total Leases": {"source": "BDH", "field": "TOT_LEASE_LIAB", "statement": "BS"},
-    #"Net Debt": {"source": "BDH", "field": "NET_DEBT", "statement": "BS"},
-    #"Effective Tax Rate": {"source": "BDH", "field": "EFF_TAX_RATE", "statement": "BS"},
 
-    # Derived Metrics
-    #"Changes in Net Working Capital": {"source": "derived", "field": "Changes in Net Working Capital", "statement": "BS"},
-    "DSO": {"source": "derived", "field": "DSO", "statement": "IS"}, # Moved DSO to derived, as it uses IS/BS fields
-    #"DIH": {"source": "derived", "field": "DIH", "statement": "BS"},
-    #"DPO": {"source": "derived", "field": "DPO", "statement": "BS"},
-    #"Net Cash from Investments & Acquisitions": {"source": "derived", "field": "Net Cash from Investments & Acquisitions", "statement": "CF", "section": "Investing"},
-    #"Increase (Decrease) in Other": {"source": "derived", "field": "Increase (Decrease) in Other", "statement": "CF", "section": "Operating"},
 }
 
 field_cell_map = {
@@ -305,7 +314,8 @@ field_cell_map = {
     "Gross Profit": "G8",
     "SG&A (Selling, General & Administrative)": "G9",
     "R&D (Research & Development)": "G10",
-    "Other Operating (Income) Expenses": "G11",
+    #"Other Operating (Income) Expenses": "G11",
+    "Total Other Operating Components": "G11",
     "EBITDA": "G12",
     "D&A (Depreciation & Amortization)": "G13",
     "Depreciation Expense": "G14",
@@ -325,63 +335,47 @@ field_cell_map = {
     "Diluted Weighted Average Shares": "G28",
 
     # Balance Sheet (BS)
-    #"Cash & Cash Equivalents & ST Investments": "G32",
     "Cash & Cash Equivalents": "G33",
     "Short-Term Investments": "G34",
     "Accounts Receivable": "G35",
     "Inventory": "G36",
-    #"Prepaid Expenses and Other Current Assets": "G37",
     "Current Assets": "G38",
-    #"Net PP&E (Property, Plant and Equipment)": "G39",
     "Gross PP&E (Property, Plant and Equipment)": "G40",
     "Accumulated Depreciation": "G41",
     "Right-of-Use Assets": "G42",
     "Intangibles": "G43",
     "Goodwill": "G44",
-    #"Intangibles excl. Goodwill": "G45",
-    #"Other Non-Current Assets": "G46",
     "Non-Current Assets": "G47",
-    #"Total Assets": "G48",
     "Accounts Payable": "G49",
-    #"Short-Term Debt": "G50",
     "Short-Term Borrowings": "G51",
     "Current Portion of Lease Liabilities": "G52",
-    #"Accrued Expenses and Other Current Liabilities": "G52", # Typo in original, likely G53
-    "Current Liabilities": "G54", # Assuming this is total current liabilities
-    #"Long-Term Debt": "G54", # Original had this as G54, likely meant for LT Borrowings
+    "Current Liabilities": "G54", 
     "Long-Term Borrowings": "G56",
     "Long-Term Operating Lease Liabilities": "G57",
-    "Non-Current Liabilities": "G59", # Assuming this is total non-current
+    "Non-Current Liabilities": "G59", 
     "Non-Controlling Interest": "G62",
 
 
     # Cash Flow Statement (CF)
-    #"Net Income": "G66", # Already in IS
     "(Increase) Decrease in Accounts Receivable": "G69",
     "(Increase) Decrease in Inventories": "G70",
     "(Increase) Decrease in Pre-paid expeses and Other CA": "G71",
     "Increase (Decrease) in Accounts Payable": "G72",
     "Increase (Decrease) in Accrued Revenues and Other CL": "G73",
     "Stock Based Compensation": "G74",
-    #"Other Operating Adjustments": "G70", # Duplicate logic if this is a sum
     "Operating Cash Flow": "G76",
-    #"Increase (Decrease) in Other": "G72", # This seems too vague for a direct map
-    #"Net Capex": "G73", # Capex is typically derived or a specific field.
-    "Acquisition of Fixed & Intangibles": "G78", # Often part of Capex
-    "Disposal of Fixed & Intangibles": "G79", # Often part of Capex
+    "Acquisition of Fixed & Intangibles": "G78",
+    "Disposal of Fixed & Intangibles": "G79", 
     "Acquisitions": "G81",
     "Divestitures": "G82",
     "Increase in LT Investment": "G83",
     "Decrease in LT Investment": "G84",
-    #"Other Investing Inflows (Outflows)": "G80",
     "Investing Cash Flow": "G86",
-    #"Net Cash from Investments & Acquisitions": "G82", # This is a derived concept
-    "Lease Payments": "G89", # Note: may be split principal/interest
-    "Debt Borrowing": "G87", # Original was G87, should be fine if it's total new debt
-    "Debt Repayment": "G88", # Original was G88
+    "Lease Payments": "G89",
+    "Debt Borrowing": "G87", 
+    "Debt Repayment": "G88", 
     "Dividends": "G90",
-    "Increase (Repurchase) of Shares": "G91", # Note: negative for repurchase
-    #"Other Financing Inflows (Outflows)": "G88",
+    "Increase (Repurchase) of Shares": "G91",
     "Financing Cash Flow": "G93",
     "Effect of Foreign Exchange": "G94",
     "Net Changes in Cash": "G95",
@@ -392,18 +386,8 @@ field_cell_map = {
     "Preferred Stock": "G102",
     #"Non-Controlling Interest": "G103", # Already in BS section
     "Enterprise Value": "G104",
-    #"Total Borrowings": "G96", # This would be a sum, better to pull directly if available or sum ST+LT
-    #"Total Leases": "G116", # This would be a sum
-    #"Net Debt": "G98", # This is derived: Total Debt - Cash & Equivalents
-    #"Effective Tax Rate": "G99", # Usually derived: Tax Expense / Pre-Tax Income
-
-    # Other Derived Metrics (ensure these are calculated, not directly mapped if "derived")
-    "DSO": "G101", # Cell for the derived DSO
-    #"Changes in Net Working Capital": "G100",
-    #"DIH": "G102",
-    #"DPO": "G103"
 }
-# --- End of skipped maps ---
+
 
 def filter_field_map_for_task(task_name, current_field_map):
     statement_code = task_name
