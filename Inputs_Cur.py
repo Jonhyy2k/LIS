@@ -220,7 +220,7 @@ field_map = {
     "R&D (Research & Development)": {"source": "BDH", "field": "IS_OPERATING_EXPENSES_RD", "statement": "IS"},
     "Other Operating (Income) Expenses": {"source": "BDH", "field": "IS_OTHER_OPER_INC", "statement": "IS"},
     "EBITDA": {"source": "BDH", "field": "EBITDA", "statement": "IS"},
-    "D&A (Depreciation & Amortization)": {"source": "BDH", "field": "ARDR_DEPRECIATION_AMORTIZATION", "statement": "IS"},
+    "D&A (Depreciation & Amortization)": {"source": "BDH", "field": "IS_DEPRECIATION_AND_AMORTIZATION", "statement": "IS"},
     "Depreciation Expense": {"source": "BDH", "field": "ARDR_DEPRECIATION_EXP", "statement": "IS"},
     "Amortization Expense": {"source": "BDH", "field": "ARDR_AMORT_EXP", "statement": "IS"},
     "Operating Income (EBIT)": {"source": "BDH", "field": "IS_OPER_INC", "statement": "IS"},
@@ -248,7 +248,6 @@ field_map = {
     #"Net PP&E (Property, Plant and Equipment)": {"source": "BDH", "field": "NET_PPE", "statement": "BS"},
     "Gross PP&E (Property, Plant and Equipment)": {"source": "BDH", "field": "BS_GROSS_FIX_ASSET", "statement": "BS"},
     "Accumulated Depreciation": {"source": "BDH", "field": "BS_ACCUM_DEPR", "statement": "BS"},
-    #"Right-of-Use Assets": {"source": "BDH", "field": "OPER_LEASE_ASSETS", "statement": "BS"},
     "Intangibles": {"source": "BDH", "field": "BS_DISCLOSED_INTANGIBLES", "statement": "BS"},
     "Goodwill": {"source": "BDH", "field": "BS_GOODWILL", "statement": "BS"},
     #"Intangibles excl. Goodwill": {"source": "BDH", "field": "NET_OTHER_INTAN_ASSETS", "statement": "BS"},
@@ -266,6 +265,7 @@ field_map = {
     "Non-Current Liabilities": {"source": "BDH", "field": "NON_CUR_LIAB", "statement": "BS"},
     "Current Liabilities": {"source": "BDH", "field": "BS_CUR_LIAB", "statement": "BS"},
     "Non-Controlling Interest": {"source": "BDH", "field": "MINORITY_NONCONTROLLING_INTEREST", "statement": "BS"},
+    "Right-of-Use Assets": {"source": "BDH", "field": "TOT_OPER_LEA_RT_OF_USE_ASSETS", "statement": "BS"},
 
     # Cash Flow Statement (CF) - Fields are typically changes or actual cash flows
     "(Increase) Decrease in Accounts Receivable": {"source": "BDH", "field": "CF_ACCT_RCV_UNBILLED_REV", "statement": "CF", "section": "Operating"},
@@ -274,9 +274,9 @@ field_map = {
     "Increase (Decrease) in Accounts Payable": {"source": "BDH", "field": "CF_CHANGE_IN_ACCOUNTS_PAYABLE", "statement": "CF", "section": "Operating"},
     "Increase (Decrease) in Accrued Revenues and Other CL": {"source": "BDH", "field": "CF_ACCT_RCV_UNBILLED_REV", "statement": "CF", "section": "Operating"},
     "Stock Based Compensation": {"source": "BDH", "field": "CF_STOCK_BASED_COMPENSATION", "statement": "CF", "section": "Operating"},
-    #"Other Operating Adjustments": {"source": "BDH", "field": "CF_OTHER_OPERATING_ACT", "statement": "CF", "section": "Operating"}, # Catch-all
+    #"Other Operating Adjustments": {"source": "BDH", "field": "CF_OTHER_OPERATING_ACT", "statement": "CF", "section": "Operating"}, 
     "Operating Cash Flow": {"source": "BDH", "field": "CF_CASH_FROM_OPER", "statement": "CF", "section": "Operating"},
-    #"Net Capex": {"source": "BDH", "field": "ARD_CAPITAL_EXPENDITURES", "statement": "CF", "section": "Investing"}, # CAPITAL_EXPEND is common
+    #"Net Capex": {"source": "BDH", "field": "ARD_CAPITAL_EXPENDITURES", "statement": "CF", "section": "Investing"}, 
     "Acquisition of Fixed & Intangibles": {"source": "BDH", "field": "ACQUIS_OF_FIXED_INTANG", "statement": "CF", "section": "Investing"},
     "Disposal of Fixed & Intangibles": {"source": "BDH", "field": "DISPOSAL_OF_FIXED_INTANG", "statement": "CF", "section": "Investing"},
     "Acquisitions": {"source": "BDH", "field": "CF_CASH_FOR_ACQUIS_SUBSIDIARIES", "statement": "CF", "section": "Investing"},
@@ -285,33 +285,35 @@ field_map = {
     "Decrease in LT Investment": {"source": "BDH", "field": "CF_DECR_INVEST", "statement": "CF", "section": "Investing"},
     #"Other Investing Inflows (Outflows)": {"source": "BDH", "field": "OTHER_INVESTING_ACT_DETAILED", "statement": "CF", "section": "Investing"},
     "Investing Cash Flow": {"source": "BDH", "field": "CF_CASH_FROM_INV_ACT", "statement": "CF", "section": "Investing"},
-    #"Lease Payments": {"source": "BDH", "field": "CF_LEASE_PAYMENTS", "statement": "CF", "section": "Financing"}, # Principal portion
+    "Lease Payments": {"source": "BDH", "field": "ARDR_REPAYMENT_FINANCE_LEASES", "statement": "CF", "section": "Financing"},
     "Debt Borrowing": {"source": "BDH", "field": "CF_LT_DEBT_CAP_LEAS_PROCEEDS", "statement": "CF", "section": "Financing"},
     "Debt Repayment": {"source": "BDH", "field": "CF_LT_DEBT_CAP_LEAS_PAYMENT", "statement": "CF", "section": "Financing"},
     "Dividends": {"source": "BDH", "field": "CF_DVD_PAID", "statement": "CF", "section": "Financing"},
-    "Increase (Repurchase) of Shares": {"source": "BDH", "field": "PROC_FR_REPURCH_EQTY_DETAILED", "statement": "CF", "section": "Financing"}, # Net issuance/repurchase
+    "Increase (Repurchase) of Shares": {"source": "BDH", "field": "PROC_FR_REPURCH_EQTY_DETAILED", "statement": "CF", "section": "Financing"}, 
     #"Other Financing Inflows (Outflows)": {"source": "BDH", "field": "OTHER_FIN_AND_DEC_CAP", "statement": "CF", "section": "Financing"},
-    "Financing Cash Flow": {"source": "BDH", "field": "CFF_ACTIVITIES_DETAILED", "statement": "CF", "section": "Financing"}, # CASH_FLOW_FDS_FIN_ACT common
-    "Effect of Foreign Exchange": {"source": "BDH", "field": "CF_EFFECT_FOREIGN_EXCHANGES", "statement": "CF", "section": "All"}, # Applies to overall CF reconciliation
+    "Financing Cash Flow": {"source": "BDH", "field": "CFF_ACTIVITIES_DETAILED", "statement": "CF", "section": "Financing"},
+    "Effect of Foreign Exchange": {"source": "BDH", "field": "CF_EFFECT_FOREIGN_EXCHANGES", "statement": "CF", "section": "All"},
+    "Net Changes in Cash": {"source": "BDH", "field": "CF_NET_CHNG_CASH", "statement": "CF", "section": "All"}, 
+    
 
     # Additional Fields (BS)
     "Market Capitalization": {"source": "BDH", "field": "CUR_MKT_CAP", "statement": "BS"},
     "Total Debt": {"source": "BDH", "field": "SHORT_AND_LONG_TERM_DEBT", "statement": "BS"},
     "Preferred Stock": {"source": "BDH", "field": "PFD_EQTY_HYBRID_CAPITAL", "statement": "BS"},
-    "Non-Controlling Interest": {"source": "BDH", "field": "MINORITY_NONCONTROLLING_INTEREST", "statement": "BS"},
+    #"Non-Controlling Interest": {"source": "BDH", "field": "MINORITY_NONCONTROLLING_INTEREST", "statement": "BS"},
     "Enterprise Value": {"source": "BDH", "field": "ENTERPRISE_VALUE", "statement": "BS"},
     "Total Borrowings": {"source": "BDH", "field": "TOT_BORROWINGS", "statement": "BS"},
     "Total Leases": {"source": "BDH", "field": "TOT_LEASE_LIAB", "statement": "BS"},
     "Net Debt": {"source": "BDH", "field": "NET_DEBT", "statement": "BS"},
-    "Effective Tax Rate": {"source": "BDH", "field": "EFF_TAX_RATE", "statement": "BS"},
+    #"Effective Tax Rate": {"source": "BDH", "field": "EFF_TAX_RATE", "statement": "BS"},
 
     # Derived Metrics
-    "Changes in Net Working Capital": {"source": "derived", "field": "Changes in Net Working Capital", "statement": "BS"},
-    "DSO": {"source": "derived", "field": "DSO", "statement": "IS"},
-    "DIH": {"source": "derived", "field": "DIH", "statement": "BS"},
-    "DPO": {"source": "derived", "field": "DPO", "statement": "BS"},
-    "Net Cash from Investments & Acquisitions": {"source": "derived", "field": "Net Cash from Investments & Acquisitions", "statement": "CF", "section": "Investing"},
-    "Increase (Decrease) in Other": {"source": "derived", "field": "Increase (Decrease) in Other", "statement": "CF", "section": "Operating"},
+    #"Changes in Net Working Capital": {"source": "derived", "field": "Changes in Net Working Capital", "statement": "BS"},
+    #"DSO": {"source": "derived", "field": "DSO", "statement": "IS"},
+    #"DIH": {"source": "derived", "field": "DIH", "statement": "BS"},
+    #"DPO": {"source": "derived", "field": "DPO", "statement": "BS"},
+    #"Net Cash from Investments & Acquisitions": {"source": "derived", "field": "Net Cash from Investments & Acquisitions", "statement": "CF", "section": "Investing"},
+    #"Increase (Decrease) in Other": {"source": "derived", "field": "Increase (Decrease) in Other", "statement": "CF", "section": "Operating"},
 
 }
 
@@ -354,7 +356,7 @@ field_cell_map = {
     #"Net PP&E (Property, Plant and Equipment)": "G39",
     "Gross PP&E (Property, Plant and Equipment)": "G40",
     "Accumulated Depreciation": "G41",
-    #"Right-of-Use Assets": "G42",
+    "Right-of-Use Assets": "G42",
     "Intangibles": "G43",
     "Goodwill": "G44",
     #"Intangibles excl. Goodwill": "G45",
@@ -372,6 +374,7 @@ field_cell_map = {
     "Long-Term Operating Lease Liabilities": "G57",
     "Non-Current Liabilities": "G59",
     "Non-Controlling Interest": "G62",
+
 
     # Cash Flow Statement (CF)
     #"Net Income": "G66",
@@ -394,7 +397,7 @@ field_cell_map = {
     #"Other Investing Inflows (Outflows)": "G80",
     "Investing Cash Flow": "G86",
     #"Net Cash from Investments & Acquisitions": "G82",
-    #"Lease Payments": "G89",
+    "Lease Payments": "G89",
     "Debt Borrowing": "G87",
     "Debt Repayment": "G88",
     "Dividends": "G90",
@@ -402,12 +405,13 @@ field_cell_map = {
     #"Other Financing Inflows (Outflows)": "G88",
     "Financing Cash Flow": "G93",
     "Effect of Foreign Exchange": "G94",
+    "Net Changes in Cash": "G95",
 
     # Additional Fields (BS)
     "Market Capitalization": "G99",
     "Total Debt": "G101",
     "Preferred Stock": "G102",
-    "Non-Controlling Interest": "G103",
+    #"Non-Controlling Interest": "G103",
     "Enterprise Value": "G104",
     #"Total Borrowings": "G96",
     #"Total Leases": "G116",
@@ -633,7 +637,7 @@ def populate_valuation_model(template_path, output_path, ticker_symbol, current_
             elif isinstance(raw_value, str): 
                 ws[cell_ref] = raw_value
             else: 
-                ws[cell_ref] = "N/A" if raw_value is None else str(raw_value) 
+                ws[cell_ref] = "0" if raw_value is None else str(raw_value) 
     
     try:
         wb.save(output_path)
