@@ -204,7 +204,11 @@ def calculate_derived_metrics(fetched_data, start_year, end_year):
     
     other_operating_components = [
         "IS_OTHER_OPER_INC",  
-        "IS_OTHER_OPERATING_EXPENSES"       
+        "IS_OTHER_OPERATING_EXPENSES",
+        "IS_FOREIGN_EXCH_LOSS",
+        "INCOME_LOSS_FROM_AFFILIATES",
+        "IS_ABNORMAL_ITEM"
+        #"OTHER_NONOP_INCOME"
     ]
 
     derived_data["Total_Other_Operating"] = {}
@@ -450,9 +454,7 @@ def populate_valuation_model(template_path, output_path, ticker_symbol, current_
             print(f"📝 Ticker '{ticker_symbol}' written to cell R4 of 'DCF' sheet.")
         else:
             print(f"⚠️ Sheet 'DCF' not found in the workbook '{output_path}'. Ticker '{ticker_symbol}' NOT written to cell R4.")
-    except Exception as e_dcf_write:
-        print(f"❌ Error writing ticker to 'DCF' sheet R4 in '{output_path}': {e_dcf_write}")
-
+            
     if "Inputs" not in wb.sheetnames:
         print("❌ The Excel template is missing the 'Inputs' sheet. I need that sheet to put the data in! Please check the template.")
         raise ValueError("'Inputs' sheet not found in the template file.")
