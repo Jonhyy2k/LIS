@@ -6,6 +6,7 @@
 # On this model there is an issue, no peers are fetched and it subprocess of data is dependant on the terminal so, outside the terminal as they are hardocded
 # the formulas wont work, to fix this, enter the peeers manually (to be fixed, talk to raul), copy the entire data on the peers and special paste it values only
 # on the same space it was, shouldnt be any formulas left
+# ... AND as excel 2016 doesnt work well with xlookup, you need to download it and open in teams/web/a pc with excel >2016...
 
 # Also to update the data after entering a ticker [AMD US Equity] (yes the equity is necessary tbd), 
 
