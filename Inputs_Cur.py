@@ -1,7 +1,16 @@
 # You need to login to the Bloomberg Terminal for the script to work!
 # Run it using the arrow on the top right.
 # Enter the stock ticker while specifying the country in the end,
-# For example AAPL US or 000660 KS (the script will automatically add [Equity]
+# For example AAPL US or 000660 KS (the script will automatically add [Equity])
+
+# On this model there is an issue, no peers are fetched and it subprocess of data is dependant on the terminal so, outside the terminal as they are hardocded
+# the formulas wont work, to fix this, enter the peeers manually (to be fixed, talk to raul), copy the entire data on the peers and special paste it values only
+# on the same space it was, shouldnt be any formulas left
+
+# Also to update the data after entering a ticker [AMD US Equity] (yes the equity is necessary tbd), 
+
+
+# PARA DE APAGAR OS MEUS FICHEIROS
 
 import blpapi
 import openpyxl
