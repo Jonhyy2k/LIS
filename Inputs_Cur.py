@@ -10,6 +10,7 @@
 
 # Also to update the data after entering a ticker [AMD US Equity] (yes the equity is necessary tbd), 
 
+# PROBLEM TO FIX: Is the data not being converted to USD??? douoble check files..., the code seems fine but will check
 
 # PARA DE APAGAR OS MEUS FICHEIROS
 
