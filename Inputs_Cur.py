@@ -596,9 +596,10 @@ def populate_valuation_model(template_path, output_path, ticker_symbol, current_
             raw_value = data_source_for_item.get(year)
 
             display_value = raw_value 
-
+            #skibidi toilet
+            
             if raw_value is None: 
-                display_value = "N/A (Missing)" 
+                display_value = "0" 
 
             try:
                 if isinstance(raw_value, (int, float)):
