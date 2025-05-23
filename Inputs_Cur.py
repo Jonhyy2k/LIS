@@ -59,7 +59,14 @@ def fetch_bloomberg_data(session, ticker, fields, field_to_name_map, start_year=
 
     if country_code and country_code != "US":
         print(f"🌍 Looks like a non-US stock ({ticker}, Country: {country_code}). I'll ask Bloomberg for data in USD to keep things consistent.")
-        request.set("currency", "USD")
+        #request.set("currency", "USD") why did gemini add this feature when just editing debugs???
+
+        # USD currency override
+        overrides = request.getElement("overrides")
+        override = overrides.appendElement()
+        override.setElement("fieldId", "EQY_FUND_CRNCY")
+        override.setElement("value", "USD")
+        
     elif country_code == "US":
         print(f"🇺🇸 This stock ({ticker}) is US-based. Data should come in USD by default.")
     else:
