@@ -1,14 +1,16 @@
 # You need to login to the Bloomberg Terminal for the script to work!
 # Run it using the arrow on the top right.
-# Enter the stock ticker while specifying the country in the end,
+# Enter the stock ticker while specifying the country in the end
 # For example AAPL US or 000660 KS (the script will automatically add [Equity])
 
-# On this model there is an issue, no peers are fetched and it subprocess of data is dependant on the terminal so, outside the terminal as they are hardocded
-# the formulas wont work, to fix this, enter the peeers manually (to be fixed, talk to raul), copy the entire data on the peers and special paste it values only
+# On this model there is an issue, no peers are fetched and it subprocess of data is dependant on the terminal so, outside the terminal as they are hardcoded
+# the formulas wont work, to fix this, enter the peers name (eg. AMZN US Equity, etc...) copy the entire data on the peers and special paste it values only
 # on the same space it was, shouldnt be any formulas left
-# ... AND as excel 2016 doesnt work well with xlookup, you need to download it and open in teams/web/a pc with excel >2016...
+# ... AND as excel 2016 doesnt work well with xlookup, you need to download it and open in teams/web/ a pc with excel >2016...
 
-# Also to update the data after entering a ticker [AMD US Equity] (yes the equity is necessary tbd), 
+# On the excel if the cell has N/A (or some iteration of this...) an error has occured with the fetching of data and must be checked manually, this is so that
+# if for example it had returned 0 instead, it would cause doubt as in some cases the values for certain names are 0
+
 
 # PROBLEM TO FIX: Is the data not being converted to USD??? douoble check files..., the code seems fine but will check
 
@@ -59,13 +61,14 @@ def fetch_bloomberg_data(session, ticker, fields, field_to_name_map, start_year=
 
     if country_code and country_code != "US":
         print(f"🌍 Looks like a non-US stock ({ticker}, Country: {country_code}). I'll ask Bloomberg for data in USD to keep things consistent.")
-        #request.set("currency", "USD") why did gemini add this feature when just editing debugs???
+        
+        request.set("currency", "USD")
 
         # USD currency override
-        overrides = request.getElement("overrides")
-        override = overrides.appendElement()
-        override.setElement("fieldId", "EQY_FUND_CRNCY")
-        override.setElement("value", "USD")
+        #overrides = request.getElement("overrides")
+        #override = overrides.appendElement()
+        #override.setElement("fieldId", "EQY_FUND_CRNCY")
+        #override.setElement("value", "USD")
         
     elif country_code == "US":
         print(f"🇺🇸 This stock ({ticker}) is US-based. Data should come in USD by default.")
@@ -306,7 +309,7 @@ field_map = {
     "Increase (Repurchase) of Shares": {"source": "BDH", "field": "PROC_FR_REPURCH_EQTY_DETAILED", "statement": "CF", "section": "Financing"},
     "Financing Cash Flow": {"source": "BDH", "field": "CFF_ACTIVITIES_DETAILED", "statement": "CF", "section": "Financing"},
     "Effect of Foreign Exchange": {"source": "BDH", "field": "CF_EFFECT_FOREIGN_EXCHANGES", "statement": "CF", "section": "All"},
-    "Net Changes in Cash": {"source": "BDH", "field": "CF_NET_CHNG_CASH", "statement": "CF", "section": "All"},
+    #"Net Changes in Cash": {"source": "BDH", "field": "CF_NET_CHNG_CASH", "statement": "CF", "section": "All"},
 
     "Market Capitalization": {"source": "BDH", "field": "CUR_MKT_CAP", "statement": "BS"},
     "Total Debt": {"source": "BDH", "field": "SHORT_AND_LONG_TERM_DEBT", "statement": "BS"},
@@ -380,7 +383,7 @@ field_cell_map = {
     "Increase (Repurchase) of Shares": "G91",
     "Financing Cash Flow": "G93",
     "Effect of Foreign Exchange": "G94",
-    "Net Changes in Cash": "G95",
+    #"Net Changes in Cash": "G95",
 
     "Market Capitalization": "G99",
     "Total Debt": "G101",
@@ -461,6 +464,8 @@ def populate_valuation_model(template_path, output_path, ticker_symbol, current_
             print(f"📝 Ticker '{ticker_symbol}' written to cell R4 of 'DCF' sheet.")
         else:
             print(f"⚠️ Sheet 'DCF' not found in the workbook '{output_path}'. Ticker '{ticker_symbol}' NOT written to cell R4.")
+    except Exception as e:
+        print("An erroe occured with the message: ", e)
             
     if "Inputs" not in wb.sheetnames:
         print("❌ The Excel template is missing the 'Inputs' sheet. I need that sheet to put the data in! Please check the template.")
