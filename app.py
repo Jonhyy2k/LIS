@@ -5,7 +5,8 @@ import psycopg2
 import os
 from datetime import datetime
 import shutil
-from Inputs_Cur import populate_valuation_model  # Import your function
+# from Inputs_Cur import populate_valuation_model  # Import your function # This line will be removed
+from dcf_automator import DCFModel 
 
 app = Flask(__name__)
 app.secret_key = os.urandom(24)
@@ -35,11 +36,11 @@ def load_user(user_id):
     conn = psycopg2.connect(**DB_CONFIG)
     cur = conn.cursor()
     cur.execute("SELECT id, username FROM users WHERE id = %s", (user_id,))
-    user = cur.fetchone()
+    user_data = cur.fetchone() 
     cur.close()
     conn.close()
-    if user:
-        return User(user[0], user[1])
+    if user_data:
+        return User(user_data[0], user_data[1])
     return None
 
 # Database connection helper
@@ -59,11 +60,11 @@ def login():
         conn = get_db_connection()
         cur = conn.cursor()
         cur.execute("SELECT id, username, password FROM users WHERE username = %s", (username,))
-        user = cur.fetchone()
+        user_data = cur.fetchone() 
         cur.close()
         conn.close()
-        if user and check_password_hash(user[2], password):
-            login_user(User(user[0], user[1]))
+        if user_data and check_password_hash(user_data[2], password):
+            login_user(User(user_data[0], user_data[1]))
             return redirect(url_for('dashboard'))
         flash('Invalid username or password')
     return render_template('login.html')
@@ -118,14 +119,30 @@ def analyze():
         flash('Ticker symbol cannot be empty')
         return redirect(url_for('dashboard'))
 
-    template_path = "LIS_Valuation_Empty.xlsx"
+    template_path = "LIS_Valuation_Empty.xlsx" 
     output_dir = "user_files"
     os.makedirs(output_dir, exist_ok=True)
     output_filename = f"{ticker}_Valuation_Model_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
     output_path = os.path.join(output_dir, output_filename)
 
     try:
-        populate_valuation_model(template_path, output_path, ticker)
+        # Instantiate the DCFModel
+        model = DCFModel(ticker) 
+
+        # Run the DCF analysis steps
+        model.download_data() 
+        model.calculate_historical_metrics()
+        model.generate_projections()
+        model.calculate_dcf() 
+
+        # Populate the Excel template with the model's data
+        model.populate_excel_template(template_path=template_path, output_path=output_path)
+        
+        # Ensure file was actually created by populate_excel_template
+        if not os.path.exists(output_path):
+             flash(f"Excel file generation failed for {ticker} after analysis.")
+             return redirect(url_for('dashboard'))
+
         conn = get_db_connection()
         cur = conn.cursor()
         cur.execute("INSERT INTO analyses (user_id, ticker, filename, created_at) VALUES (%s, %s, %s, %s)",
@@ -136,6 +153,8 @@ def analyze():
         return send_file(output_path, as_attachment=True)
     except Exception as e:
         flash(f"Error processing analysis: {str(e)}")
+        import traceback
+        traceback.print_exc() 
         return redirect(url_for('dashboard'))
 
 @app.route('/download/<analysis_id>')
@@ -158,4 +177,6 @@ def download(analysis_id):
     return redirect(url_for('dashboard'))
 
 if __name__ == '__main__':
+    if not os.path.exists("user_files"):
+        os.makedirs("user_files")
     app.run(host='0.0.0.0', port=5000, debug=True)
