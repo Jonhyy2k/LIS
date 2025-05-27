@@ -11,8 +11,14 @@
 # On the excel if the cell has N/A (or some iteration of this...) an error has occured with the fetching of data and must be checked manually, this is so that
 # if for example it had returned 0 instead, it would cause doubt as in some cases the values for certain names are 0
 
+#--------#-------# TO DO LIST
+# To fix... excel peers ratios are not linked, gonna kms before i do that tho
+# Peers thing on.. my pc doesnt do that idk why 
+# Holders and board, must also be same issue, double check on 23
 
-# PROBLEM TO FIX: Is the data not being converted to USD??? douoble check files..., the code seems fine but will check
+# Must watch before making it work<<<
+# https://www.youtube.com/watch?v=qxgSbP3H3YY
+
 
 # PARA DE APAGAR OS MEUS FICHEIROS
 
